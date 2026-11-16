@@ -32,6 +32,13 @@ class Settings:
     reflection_time: str
     news_in_brief: bool
     tts_voice: str
+    google_oauth_client_id: str | None
+    google_oauth_client_secret: str | None
+    weekly_time: str
+    weekly_day: int
+    ideas_time: str
+    ideas_day: int
+    meeting_prep: bool
 
     @property
     def tz(self) -> ZoneInfo:
@@ -67,6 +74,13 @@ def load() -> Settings:
         reflection_time=_env("REFLECTION_TIME", "23:30"),
         news_in_brief=(_env("NEWS_IN_BRIEF", "true").lower() == "true"),
         tts_voice=_env("TTS_VOICE", "es-AR-TomasNeural"),
+        google_oauth_client_id=_env("GOOGLE_OAUTH_CLIENT_ID"),
+        google_oauth_client_secret=_env("GOOGLE_OAUTH_CLIENT_SECRET"),
+        weekly_time=_env("WEEKLY_TIME", "21:00"),
+        weekly_day=int(_env("WEEKLY_DAY", "6")),  # 0=lunes … 6=domingo
+        ideas_time=_env("IDEAS_TIME", "19:00"),
+        ideas_day=int(_env("IDEAS_DAY", "2")),  # miércoles
+        meeting_prep=(_env("MEETING_PREP", "true").lower() == "true"),
     )
 
 

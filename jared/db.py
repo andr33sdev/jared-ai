@@ -49,6 +49,18 @@ create table if not exists processed_updates (
     update_id bigint primary key,
     created_at timestamptz not null default now()
 );
+alter table memories add column if not exists status text;
+alter table memories add column if not exists reviewed_at timestamptz;
+create table if not exists usage (
+    day date not null,
+    model text not null,
+    input bigint not null default 0,
+    output bigint not null default 0,
+    cache_write bigint not null default 0,
+    cache_read bigint not null default 0,
+    searches int not null default 0,
+    primary key (day, model)
+);
 """
 
 

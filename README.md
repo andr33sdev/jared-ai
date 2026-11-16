@@ -10,6 +10,13 @@ Asistente personal por Telegram con Claude como cerebro. Tiene la personalidad d
 - Busca en internet y todas las mañanas te trae novedades sobre tus intereses.
 - Te escribe sin que le hables: resumen a las 08:00, chequeo a las 16:00 (solo si hay algo útil) y una reflexión nocturna en la que completa la memoria.
 - `/charla` abre un modo para pensar en voz alta con audios y `/fin` lo cierra con conclusiones y próximos pasos.
+- Recordatorios con botones: *✅ Hecho*, *+1 hora* y *Mañana*.
+- Tareas con cierre: le decís "ya lo hice" o tocás ✅ en `/pendientes`.
+- Ayuda-memoria 30 minutos antes de cada reunión, con lo que sabe del tema y de la gente.
+- Resumen semanal el domingo a las 21 y repaso de una idea vieja los miércoles a las 19.
+- Presupuesto mensual por rubro, con avisos al 80 % y al 100 %.
+- Gmail en solo lectura: los mails que necesitan acción aparecen en el resumen de la mañana.
+- `/costo` muestra el gasto estimado en Claude del mes.
 
 **Arquitectura:** Python con FastAPI. Telegram le avisa cada mensaje nuevo por webhook, Claude (Sonnet 5.5) hace de cerebro con herramientas y búsqueda web, y la base es Postgres en Supabase. Corre en Render (plan gratis) y tiene un reloj interno que revisa cada minuto si hay recordatorios o tareas pendientes.
 
@@ -58,6 +65,15 @@ Con un solo servicio prendido todo el mes se usan unas 744 de las 750 horas grat
 4. En Google Calendar → tu calendario → **Configuración y uso compartido → Compartir con personas** → agregá el mail de la cuenta de servicio (`...@...iam.gserviceaccount.com`) con permiso **"Hacer cambios en eventos"**.
 5. `GOOGLE_CALENDAR_ID` = tu Gmail.
 
+### 8. Gmail (opcional)
+Usa tu cuenta personal en modo **solo lectura**: Jared nunca manda, borra ni mueve mails.
+1. En el mismo proyecto de Google Cloud: **APIs & Services → Library** → habilitá **Gmail API**.
+2. **Google Auth Platform** (o "OAuth consent screen") → configurá la app: nombre "Jared", tipo **External**, con tu mail de soporte.
+3. En **Audience**, tocá **Publish app** para pasarla a *In production*. Si la dejás en *Testing*, Google corta el permiso cada 7 días y vas a tener que reconectar con `/gmail`.
+4. **Clients → Create client → Web application**. En *Authorized redirect URIs* agregá `https://TU-SERVICIO.onrender.com/google/callback`.
+5. Copiá el *Client ID* y el *Client secret* en Render como `GOOGLE_OAUTH_CLIENT_ID` y `GOOGLE_OAUTH_CLIENT_SECRET`.
+6. En Telegram mandale `/gmail` a Jared, abrí el link y aceptá. Google te va a avisar que la app no está verificada: es tu propia app, así que tocá **Configuración avanzada → Ir a Jared**.
+
 ---
 
 ## Uso
@@ -65,9 +81,12 @@ Con un solo servicio prendido todo el mes se usan unas 744 de las 750 horas grat
 - `/charla` y `/fin`: modo para pensar en voz alta.
 - `/resumen`: el resumen del día en el momento.
 - `/recordatorios` y `/memoria`: qué tiene pendiente y qué anotó.
+- `/pendientes`: tareas abiertas, con botones para cerrarlas.
+- `/presupuesto` y `/costo`: topes de gasto del mes y gasto estimado en Claude.
+- `/gmail`: conectar el correo.
 - `/voz si` o `/voz no`: respuestas en audio. Si le mandás un audio, te contesta también con audio.
 
-Los horarios automáticos se cambian con `BRIEF_TIME`, `CHECKIN_TIME` y `REFLECTION_TIME`.
+Los horarios automáticos se cambian con `BRIEF_TIME`, `CHECKIN_TIME`, `REFLECTION_TIME`, `WEEKLY_TIME`/`WEEKLY_DAY` e `IDEAS_TIME`/`IDEAS_DAY` (los días van de 0 = lunes a 6 = domingo). Con `MEETING_PREP=false` se apaga la ayuda-memoria de reuniones.
 
 ## Costos
 - Render, Supabase, cron-job.org, Groq y Telegram: gratis.

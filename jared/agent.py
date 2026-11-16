@@ -8,7 +8,7 @@ from typing import Any
 
 from anthropic import AsyncAnthropic
 
-from . import config, db, persona
+from . import config, db, persona, usage
 from .tools import TOOL_DEFS, now_local, run_tool, when_label
 
 log = logging.getLogger("jared.agent")
@@ -58,7 +58,7 @@ async def context_block(mode: str | None) -> str:
 
     recent = await db.fetch(
         "select id, category, content, amount, currency from memories where active "
-        "and category not in ('preferencia','interes','objetivo','proyecto','persona') "
+        "and category not in ('preferencia','interes','objetivo','proyecto','persona','tarea') "
         "order by created_at desc limit 15"
     )
     if recent:
@@ -67,6 +67,13 @@ async def context_block(mode: str | None) -> str:
             amt = f" ({float(r['amount']):,.0f} {r['currency']})" if r["amount"] is not None else ""
             lines.append(f"- [{r['id']}·{r['category']}] {r['content']}{amt}")
         parts.append("## Anotado recientemente\n" + "\n".join(lines))
+
+    tasks = await db.fetch(
+        "select id, content from memories where active and category = 'tarea' and status is null "
+        "order by created_at limit 15"
+    )
+    if tasks:
+        parts.append("## Tareas abiertas\n" + "\n".join(f"- [{r['id']}] {r['content']}" for r in tasks))
 
     rems = await db.fetch(
         "select id, text, due_at, recurrence from reminders where not done "
@@ -138,6 +145,10 @@ async def run(
                 tools=tools(),
                 messages=messages,
             )
+            try:
+                await usage.record(config.settings.model, resp.usage)
+            except Exception:
+                log.exception("No pude registrar el uso")
             messages.append({"role": "assistant", "content": [_dump(b) for b in resp.content]})
             texts = [b.text for b in resp.content if b.type == "text"]
             if texts:

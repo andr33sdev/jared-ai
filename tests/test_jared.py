@@ -161,7 +161,7 @@ async def test_daily_jobs_run_once(database, monkeypatch):
     monkeypatch.setattr(config.settings, "brief_time", f"{now.hour:02d}:{now.minute:02d}")
     monkeypatch.setattr(config.settings, "checkin_time", "00:00" if now.hour >= 4 else "23:59")
     monkeypatch.setattr(config.settings, "reflection_time", "23:59" if now.hour < 20 else "00:00")
-    monkeypatch.setattr(scheduler, "JOBS", [("brief", "brief_time", fake_job)])
+    monkeypatch.setattr(scheduler, "JOBS", [("brief", "brief_time", fake_job, None)])
     await scheduler.daily_jobs()
     await scheduler.daily_jobs()
     assert calls == [1]
@@ -184,7 +184,7 @@ async def test_missed_daily_job_is_skipped(database, monkeypatch):
     if past.date() != tools.now_local().date():
         pytest.skip("cerca de medianoche")
     monkeypatch.setattr(config.settings, "brief_time", f"{past.hour:02d}:{past.minute:02d}")
-    monkeypatch.setattr(scheduler, "JOBS", [("brief", "brief_time", fake_job)])
+    monkeypatch.setattr(scheduler, "JOBS", [("brief", "brief_time", fake_job, None)])
     await scheduler.daily_jobs()
     assert calls == []
 
@@ -194,3 +194,127 @@ async def test_when_label():
     assert tools.when_label(now) == "hoy 10:00"
     assert tools.when_label(now + timedelta(days=1)) == "mañana 10:00"
     assert tools.when_label(now + timedelta(days=3)).endswith(f"{(now + timedelta(days=3)):%d/%m} 10:00")
+
+
+# --- features nuevas --------------------------------------------------------
+
+def _cb(data, text="⏰ Recordatorio: Llamar a Juan", markup=None):
+    msg = {"chat": {"id": 42}, "message_id": 9, "text": text}
+    if markup:
+        msg["reply_markup"] = markup
+    return {"update_id": 100, "callback_query": {"id": "cb1", "from": {"id": 42}, "data": data, "message": msg}}
+
+
+@pytest.fixture
+def tg_calls(monkeypatch):
+    from jared import telegram
+    calls = []
+
+    async def fake_call(method, **params):
+        calls.append((method, params))
+        return {}
+
+    monkeypatch.setattr(telegram, "call", fake_call)
+    return calls
+
+
+async def test_reminder_buttons(database, tg_calls):
+    from jared import telegram
+    sent = []
+
+    async def fake_send(chat_id, text, buttons=None):
+        sent.append((text, buttons))
+
+    telegram.send_message, old = fake_send, telegram.send_message
+    try:
+        await db.execute("insert into reminders (text, due_at) values ('Llamar a Juan', now())")
+        await scheduler.send_due_reminders()
+        assert sent[0][1][0][0] == ("✅ Hecho", "rem:done:1")
+        tom = sent[0][1][0][2][1]
+        await handle_update(_cb("rem:1h:1"))
+        await handle_update(_cb(tom))
+        rows = await db.fetch("select text, due_at from reminders where not done order by due_at")
+        assert [r["text"] for r in rows] == ["Llamar a Juan", "Llamar a Juan"]
+        assert rows[0]["due_at"] < rows[1]["due_at"]
+        assert any(m == "editMessageText" and "Pospuesto" in p["text"] for m, p in tg_calls)
+    finally:
+        telegram.send_message = old
+
+
+async def test_tasks_and_button(database, tg_calls):
+    await tools.guardar_memoria("tarea", "Llamar al proveedor de resina")
+    await tools.guardar_memoria("tarea", "Pedir presupuesto de moldes")
+    await handle_update({"update_id": 5, "message": {"chat": {"id": 42, "type": "private"},
+                                                      "from": {"id": 42}, "text": "/pendientes"}})
+    send = [p for m, p in tg_calls if m == "sendMessage"][-1]
+    assert "Llamar al proveedor" in send["text"]
+    kb = send["reply_markup"]["inline_keyboard"]
+    await handle_update(_cb(kb[0][0]["callback_data"], markup=send["reply_markup"]))
+    assert len(await tools.open_tasks()) == 1
+    edit = [p for m, p in tg_calls if m == "editMessageReplyMarkup"][-1]
+    assert len(edit["reply_markup"]["inline_keyboard"][0]) == 1
+
+
+async def test_budget_alerts_once(database):
+    await tools.definir_presupuesto("super", 100000)
+    r1 = json.loads(await tools.guardar_memoria("gasto", "Coto", amount=50000, tags=["super"]))
+    assert "alerta_presupuesto" not in r1
+    r2 = json.loads(await tools.guardar_memoria("gasto", "Día", amount=35000, tags=["super"]))
+    assert "cerca del tope" in r2["alerta_presupuesto"]
+    r3 = json.loads(await tools.guardar_memoria("gasto", "Chino", amount=1000, tags=["super"]))
+    assert "alerta_presupuesto" not in r3
+    r4 = json.loads(await tools.guardar_memoria("gasto", "Coto", amount=20000, tags=["super"]))
+    assert "Se pasó" in r4["alerta_presupuesto"]
+    status = await tools.budget_status()
+    assert status[0]["porcentaje"] == 106
+
+
+async def test_usage_cost(database):
+    from jared import usage
+    from anthropic.types import Usage, ServerToolUsage
+    await usage.record("claude-sonnet-5-5", Usage(input_tokens=1_000_000, output_tokens=100_000,
+                       cache_creation_input_tokens=0, cache_read_input_tokens=0,
+                       server_tool_use=ServerToolUsage(web_search_requests=3, web_fetch_requests=0)))
+    s = await usage.summary()
+    assert abs(s["mes"] - (2.0 + 1.0 + 0.03)) < 1e-6
+
+
+async def test_idea_review(database, monkeypatch, tg_calls):
+    await tools.guardar_memoria("idea", "Vender topes de estacionamiento impresos en 3D")
+    await db.execute("update memories set created_at = now() - interval '10 days'")
+    fake = FakeClaude([_msg([TextBlock(type="text", text="¿Avanzamos con los topes?")], "end_turn")])
+    monkeypatch.setattr(agent, "client", lambda: fake)
+    await scheduler.idea_review()
+    send = [p for m, p in tg_calls if m == "sendMessage"][-1]
+    assert send["reply_markup"]["inline_keyboard"][0][1]["callback_data"] == "idea:no:1"
+    await handle_update(_cb("idea:no:1", text=send["text"]))
+    row = await db.fetchrow("select status from memories where id = 1")
+    assert row["status"] == "descartada"
+    tg_calls.clear()
+    await scheduler.idea_review()  # ya no hay ideas para repasar
+    assert tg_calls == []
+
+
+async def test_meeting_prep(database, monkeypatch, sent):
+    from jared import gcal
+    start = tools.now_local() + timedelta(minutes=20)
+    ev = {"id": "e1", "titulo": "Reunión ISO", "inicio": start.isoformat(), "fin": None,
+          "todo_el_dia": False, "lugar": None, "descripcion": None}
+
+    async def fake_list(a, b, max_results=50):
+        return [ev]
+
+    monkeypatch.setattr(gcal, "list_events", fake_list)
+    monkeypatch.setattr(config.settings, "google_sa_json", "{}")
+    monkeypatch.setattr(config.settings, "google_calendar_id", "x@gmail.com")
+    fake = FakeClaude([_msg([TextBlock(type="text", text="• Llevá el manual de calidad")], "end_turn")])
+    monkeypatch.setattr(agent, "client", lambda: fake)
+    await scheduler.calendar_alerts()
+    await scheduler.calendar_alerts()
+    assert len(sent) == 1
+    assert "Reunión ISO" in sent[0][1] and "manual de calidad" in sent[0][1]
+
+
+async def test_gmail_not_connected(database):
+    out = json.loads(await tools.buscar_mails())
+    assert "no está conectado" in out["error"]

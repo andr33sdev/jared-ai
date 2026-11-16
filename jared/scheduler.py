@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta
 
@@ -21,6 +22,7 @@ BRIEF_PROMPT = """[Tarea automática: resumen de la mañana. {name} no escribió
 Armá un mensaje de buenos días breve y útil:
 1. Agenda de hoy (ver_agenda de hoy 00:00 a 23:59), si el calendario está conectado.
 2. Recordatorios y tareas de hoy.
+2b. Si Gmail está conectado, revisá los no leídos de las últimas 24 hs (buscar_mails) y mencioná SOLO los que pidan una acción o respuesta suya (máx. 3, una línea cada uno).
 {news}
 4. Cerrá con una sola sugerencia o pregunta concreta para avanzar algo que le importe (un proyecto, una idea pendiente).
 Si no hay nada en algún punto, salteálo sin comentarlo. Nada de relleno."""
@@ -41,6 +43,25 @@ Esta es la conversación de las últimas 24 horas:
 Respondé solo "OK" al terminar."""
 
 
+MEETING_PROMPT = """[Tarea automática: {name} tiene este evento en ~30 minutos: {evento}]
+Prepará un ayuda-memoria MUY breve (máx. 5 viñetas): qué sabés del tema y de la gente involucrada (buscá en la memoria por palabras del título), tareas o ideas pendientes relacionadas, y qué conviene llevar o preguntar.
+No repitas el título ni la hora (ya se los muestro). Si no encontrás nada útil, respondé exactamente: NADA"""
+
+WEEKLY_PROMPT = """[Tarea automática: resumen semanal. {name} no escribió nada; vos iniciás.]
+Armá un resumen de la semana, corto y fácil de leer en el celular:
+1. Gastos de los últimos 7 días (resumen_gastos) por rubro, y cómo viene el mes contra los topes (ver_presupuesto), si hay.
+2. Ideas y pensamientos que anotó esta semana (buscar_memoria con since de hace 7 días).
+3. Tareas que siguen abiertas.
+4. Agenda de la semana que viene, si el calendario está conectado.
+5. Una sola sugerencia concreta para la semana.
+Salteá lo que esté vacío sin comentarlo."""
+
+IDEA_PROMPT = """[Tarea automática: repaso de ideas. {name} no escribió nada.]
+Esta es una idea que anotó hace un tiempo y quedó en el aire:
+[{id}] {content} (anotada el {fecha})
+Recordásela en una o dos líneas y preguntale qué quiere hacer: avanzar, descartarla o dejarla para más adelante. Si se te ocurre un primer paso concreto y chico, sugerilo. Nada más: abajo le muestro botones."""
+
+
 def _parse_hhmm(value: str) -> tuple[int, int]:
     h, m = value.split(":")
     return int(h), int(m)
@@ -59,7 +80,10 @@ async def send_due_reminders() -> None:
         text = f"⏰ **Recordatorio:** {r['text']}"
         if late:
             text += f"\n(Era para las {due_local:%H:%M}, perdón la demora.)"
-        await telegram.send_message(owner, text)
+        buttons = [[("✅ Hecho", f"rem:done:{r['id']}"),
+                    ("+1 hora", f"rem:1h:{r['id']}"),
+                    ("Mañana", f"rem:tom:{r['id']}:{due_local:%H%M}")]]
+        await telegram.send_message(owner, text, buttons=buttons)
         nxt = next_occurrence(r["due_at"], r["recurrence"], now_local())
         if nxt:
             await db.execute("update reminders set due_at = %s where id = %s", nxt, r["id"])
@@ -84,11 +108,24 @@ async def calendar_alerts(minutes_before: int = 30) -> None:
             continue
         mins = max(1, round((start - now).total_seconds() / 60))
         where = f" en {ev['lugar']}" if ev.get("lugar") else ""
-        await telegram.send_message(owner, f"📅 En {mins} min: **{ev['titulo']}**{where} ({start:%H:%M})")
+        header = f"📅 En {mins} min: **{ev['titulo']}**{where} ({start:%H:%M})"
         alerted.append(ev["id"])
-        changed = True
-    if changed:
         await db.kv_set("alerted_events", alerted[-200:])
+        prep = ""
+        if config.settings.meeting_prep:
+            try:
+                prep = await agent.run(
+                    MEETING_PROMPT.format(name=config.settings.owner_name,
+                                          evento=json.dumps(ev, ensure_ascii=False)),
+                    save=False,
+                )
+            except Exception:
+                log.exception("Falló la preparación de la reunión")
+        if prep.strip().upper().rstrip(".") == "NADA":
+            prep = ""
+        message = header + ("\n\n" + prep if prep else "")
+        await telegram.send_message(owner, message)
+        await db.add_message("assistant", f"(Aviso automático de reunión) {message}")
 
 
 async def morning_brief() -> None:
@@ -127,10 +164,49 @@ async def reflection() -> None:
     )
 
 
+async def weekly_summary() -> None:
+    text = await agent.run(
+        WEEKLY_PROMPT.format(name=config.settings.owner_name),
+        record_as="(mensaje automático: resumen semanal)",
+    )
+    if text:
+        await telegram.send_message(config.settings.owner_id, text)
+
+
+async def idea_review() -> None:
+    row = await db.fetchrow(
+        "select id, content, created_at from memories where active and category = 'idea' "
+        "and status is null and created_at < now() - interval '5 days' "
+        "and (reviewed_at is null or reviewed_at < now() - interval '30 days') "
+        "order by coalesce(reviewed_at, created_at) limit 1"
+    )
+    if not row:
+        return
+    await db.execute("update memories set reviewed_at = now() where id = %s", row["id"])
+    text = await agent.run(
+        IDEA_PROMPT.format(name=config.settings.owner_name, id=row["id"], content=row["content"],
+                           fecha=row["created_at"].astimezone(config.settings.tz).strftime("%d/%m")),
+        save=False,
+    )
+    if not text:
+        return
+    await db.add_message("user", "(mensaje automático: repaso de una idea)")
+    await db.add_message("assistant", text)
+    await telegram.send_message(
+        config.settings.owner_id, text,
+        buttons=[[("🚀 Avanzar", f"idea:go:{row['id']}"),
+                  ("🗑 Descartar", f"idea:no:{row['id']}"),
+                  ("⏳ Más adelante", f"idea:later:{row['id']}")]],
+    )
+
+
+# (clave, horario, función, día de la semana o None = todos los días)
 JOBS = [
-    ("brief", "brief_time", morning_brief),
-    ("checkin", "checkin_time", checkin),
-    ("reflection", "reflection_time", reflection),
+    ("brief", "brief_time", morning_brief, None),
+    ("checkin", "checkin_time", checkin, None),
+    ("reflection", "reflection_time", reflection, None),
+    ("weekly", "weekly_time", weekly_summary, "weekly_day"),
+    ("ideas", "ideas_time", idea_review, "ideas_day"),
 ]
 
 
@@ -138,7 +214,9 @@ async def daily_jobs() -> None:
     now = now_local()
     today = now.date().isoformat()
     last_runs: dict = await db.kv_get("last_runs", {})
-    for key, attr, fn in JOBS:
+    for key, attr, fn, day_attr in JOBS:
+        if day_attr is not None and now.weekday() != getattr(config.settings, day_attr):
+            continue
         h, m = _parse_hhmm(getattr(config.settings, attr))
         scheduled = now.replace(hour=h, minute=m, second=0, microsecond=0)
         if last_runs.get(key) == today or not (scheduled <= now <= scheduled + timedelta(minutes=JOB_GRACE_MINUTES)):

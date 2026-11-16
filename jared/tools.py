@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Awaitable, Callable
 
-from . import config, db, gcal
+from . import config, db, gcal, gmail
 
 log = logging.getLogger("jared.tools")
 
@@ -111,13 +111,21 @@ async def guardar_memoria(category: str, content: str, amount: float | None = No
         [t.lower().strip() for t in (tags or [])],
         happened_on or (now_local().date().isoformat() if category in ("gasto", "ingreso") else None),
     )
-    return _out({"ok": True, "id": row["id"]})
+    result: dict = {"ok": True, "id": row["id"]}
+    if category == "gasto" and amount is not None and tags:
+        alerta = await check_budget(tags[0].lower().strip(), currency or "ARS")
+        if alerta:
+            result["alerta_presupuesto"] = alerta
+    return _out(result)
 
 
 async def buscar_memoria(query: str | None = None, category: str | None = None,
-                         since: str | None = None, limit: int = 15) -> str:
+                         since: str | None = None, limit: int = 15,
+                         solo_abiertas: bool = False) -> str:
     where = ["active"]
     args: list[Any] = []
+    if solo_abiertas:
+        where.append("status is null")
     if category:
         where.append("category = %s")
         args.append(category)
@@ -132,7 +140,7 @@ async def buscar_memoria(query: str | None = None, category: str | None = None,
         )
         args += [query, f"%{query}%", query.lower()]
     sql = (
-        "select id, category, content, amount, currency, tags, happened_on, created_at "
+        "select id, category, content, amount, currency, tags, happened_on, status, created_at "
         f"from memories where {' and '.join(where)} order by {order} limit %s"
     )
     rows = await db.fetch(sql, *args, max(1, min(int(limit), 50)))
@@ -179,6 +187,103 @@ async def resumen_gastos(desde: str, hasta: str | None = None) -> str:
 async def actualizar_perfil(texto: str) -> str:
     await db.kv_set("profile", texto.strip())
     return _out({"ok": True})
+
+
+async def completar_tarea(id: int) -> str:
+    row = await db.fetchrow(
+        "update memories set status = 'hecha', updated_at = now() where id = %s and category = 'tarea' "
+        "returning content", id)
+    return _out({"ok": bool(row), "tarea": row["content"] if row else None})
+
+
+async def marcar_idea(id: int, estado: str) -> str:
+    """estado: descartada | pospuesta | en_marcha"""
+    if estado == "pospuesta":
+        row = await db.fetchrow(
+            "update memories set reviewed_at = now() where id = %s returning content", id)
+    else:
+        row = await db.fetchrow(
+            "update memories set status = %s, reviewed_at = now(), updated_at = now() "
+            "where id = %s returning content", estado, id)
+    return _out({"ok": bool(row)})
+
+
+async def open_tasks(limit: int = 30) -> list[dict]:
+    return await db.fetch(
+        "select id, content, created_at from memories where active and category = 'tarea' "
+        "and status is null order by created_at limit %s", limit)
+
+
+# --- presupuesto -------------------------------------------------------------
+
+async def month_spent(rubro: str, currency: str) -> float:
+    first = now_local().date().replace(day=1)
+    row = await db.fetchrow(
+        "select coalesce(sum(amount), 0) as total from memories where active and category = 'gasto' "
+        "and coalesce(tags[1], '') = %s and coalesce(currency, 'ARS') = %s "
+        "and coalesce(happened_on, created_at::date) >= %s", rubro, currency, first)
+    return float(row["total"])
+
+
+async def check_budget(rubro: str, currency: str) -> str | None:
+    budgets: dict = await db.kv_get("budgets", {})
+    b = budgets.get(rubro)
+    if not b or b.get("moneda", "ARS") != currency:
+        return None
+    spent = await month_spent(rubro, currency)
+    pct = spent / b["monto"] * 100 if b["monto"] else 0
+    level = 100 if pct >= 100 else 80 if pct >= 80 else 0
+    if not level:
+        return None
+    month = now_local().strftime("%Y-%m")
+    alerts: dict = await db.kv_get("budget_alerts", {})
+    done = alerts.get(month, {})
+    if done.get(rubro, 0) >= level:
+        return None
+    done[rubro] = level
+    await db.kv_set("budget_alerts", {month: done})
+    return (f"{rubro}: lleva {spent:,.0f} de {b['monto']:,.0f} {currency} este mes ({pct:.0f}%). "
+            + ("Se pasó del tope." if level == 100 else "Está cerca del tope."))
+
+
+async def definir_presupuesto(rubro: str, monto: float, moneda: str = "ARS") -> str:
+    budgets: dict = await db.kv_get("budgets", {})
+    rubro = rubro.lower().strip()
+    if monto <= 0:
+        budgets.pop(rubro, None)
+    else:
+        budgets[rubro] = {"monto": monto, "moneda": moneda}
+    await db.kv_set("budgets", budgets)
+    return _out({"ok": True, "presupuestos": budgets})
+
+
+async def budget_status() -> list[dict]:
+    budgets: dict = await db.kv_get("budgets", {})
+    out = []
+    for rubro, b in sorted(budgets.items()):
+        spent = await month_spent(rubro, b.get("moneda", "ARS"))
+        out.append({"rubro": rubro, "tope": b["monto"], "moneda": b.get("moneda", "ARS"),
+                    "gastado": spent, "porcentaje": round(spent / b["monto"] * 100) if b["monto"] else 0})
+    return out
+
+
+async def ver_presupuesto() -> str:
+    return _out({"mes": now_local().strftime("%m/%Y"), "rubros": await budget_status()})
+
+
+# --- gmail -------------------------------------------------------------------
+
+async def buscar_mails(query: str = "is:unread newer_than:1d -category:promotions -category:social",
+                       max_results: int = 10) -> str:
+    if not await gmail.connected():
+        return _out({"error": "Gmail no está conectado. Andrés puede conectarlo con /gmail."})
+    return _out({"mails": await gmail.search(query, max_results)})
+
+
+async def leer_mail(id: str) -> str:
+    if not await gmail.connected():
+        return _out({"error": "Gmail no está conectado. Andrés puede conectarlo con /gmail."})
+    return _out({"mail": await gmail.read(id)})
 
 
 # --- recordatorios ---------------------------------------------------------
@@ -282,8 +387,55 @@ TOOL_DEFS: list[dict] = [
                 "category": {"type": "string", "enum": CATEGORIES},
                 "since": {"type": "string", "description": "Fecha ISO desde la cual buscar"},
                 "limit": {"type": "integer", "default": 15},
+                "solo_abiertas": {"type": "boolean", "description": "Solo tareas no hechas / ideas no descartadas"},
             },
         },
+    },
+    {
+        "name": "completar_tarea",
+        "description": "Marca una tarea como hecha (cuando Andrés dice que ya la hizo). Buscala antes con buscar_memoria(category='tarea', solo_abiertas=true).",
+        "input_schema": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]},
+    },
+    {
+        "name": "marcar_idea",
+        "description": "Cambia el estado de una idea: 'en_marcha' (decidió avanzar), 'descartada' o 'pospuesta' (más adelante).",
+        "input_schema": {
+            "type": "object",
+            "properties": {"id": {"type": "integer"},
+                           "estado": {"type": "string", "enum": ["en_marcha", "descartada", "pospuesta"]}},
+            "required": ["id", "estado"],
+        },
+    },
+    {
+        "name": "definir_presupuesto",
+        "description": "Define (o borra con monto 0) el tope mensual de gasto de un rubro. El rubro es la primera etiqueta de los gastos.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"rubro": {"type": "string"}, "monto": {"type": "number"},
+                           "moneda": {"type": "string", "default": "ARS"}},
+            "required": ["rubro", "monto"],
+        },
+    },
+    {
+        "name": "ver_presupuesto",
+        "description": "Cómo va el mes contra los topes de gasto por rubro.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "buscar_mails",
+        "description": (
+            "Busca en el Gmail de Andrés (solo lectura) con sintaxis de búsqueda de Gmail. "
+            "Por defecto: no leídos de las últimas 24 hs sin promociones ni redes."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}, "max_results": {"type": "integer", "default": 10}},
+        },
+    },
+    {
+        "name": "leer_mail",
+        "description": "Lee el contenido de un mail por id (de buscar_mails).",
+        "input_schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
     },
     {
         "name": "editar_memoria",
@@ -390,6 +542,12 @@ HANDLERS: dict[str, Callable[..., Awaitable[str]]] = {
     "ver_agenda": ver_agenda,
     "crear_evento": crear_evento,
     "borrar_evento": borrar_evento,
+    "completar_tarea": completar_tarea,
+    "marcar_idea": marcar_idea,
+    "definir_presupuesto": definir_presupuesto,
+    "ver_presupuesto": ver_presupuesto,
+    "buscar_mails": buscar_mails,
+    "leer_mail": leer_mail,
 }
 
 

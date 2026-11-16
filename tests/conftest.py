@@ -17,7 +17,7 @@ config.reload()
 @pytest_asyncio.fixture
 async def database():
     await db.init(os.environ["TEST_DATABASE_URL"])
-    await db.execute("truncate messages, memories, reminders, kv, processed_updates restart identity")
+    await db.execute("truncate messages, memories, reminders, kv, processed_updates, usage restart identity")
     yield db
     await db.close()
 
@@ -29,7 +29,7 @@ def sent(monkeypatch):
 
     out = []
 
-    async def fake_send(chat_id, text):
+    async def fake_send(chat_id, text, buttons=None):
         out.append((chat_id, text))
 
     async def fake_call(method, **params):

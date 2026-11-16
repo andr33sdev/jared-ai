@@ -33,8 +33,17 @@ async def call(method: str, **params) -> dict:
     return data["result"]
 
 
-async def send_message(chat_id: int, text: str) -> None:
-    for chunk in split_text(text):
+def keyboard(rows: list[list[tuple[str, str]]]) -> dict:
+    """[[('✅ Hecho', 'rem:done:3'), ...], ...] -> inline_keyboard de Telegram."""
+    return {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row] for row in rows]}
+
+
+async def send_message(chat_id: int, text: str, buttons: list[list[tuple[str, str]]] | None = None) -> None:
+    chunks = split_text(text)
+    for i, chunk in enumerate(chunks):
+        extra = {}
+        if buttons and i == len(chunks) - 1:
+            extra["reply_markup"] = keyboard(buttons)
         try:
             await call(
                 "sendMessage",
@@ -42,10 +51,25 @@ async def send_message(chat_id: int, text: str) -> None:
                 text=md_to_tg_html(chunk),
                 parse_mode="HTML",
                 disable_web_page_preview=True,
+                **extra,
             )
         except Exception as exc:  # HTML inválido: mandamos texto plano
             log.warning("Fallo HTML, envío plano: %s", exc)
-            await call("sendMessage", chat_id=chat_id, text=chunk, disable_web_page_preview=True)
+            await call("sendMessage", chat_id=chat_id, text=chunk, disable_web_page_preview=True, **extra)
+
+
+async def answer_callback(callback_id: str, text: str = "") -> None:
+    await call("answerCallbackQuery", callback_query_id=callback_id, text=text[:190])
+
+
+async def edit_buttons(chat_id: int, message_id: int, buttons: list[list[tuple[str, str]]] | None) -> None:
+    await call("editMessageReplyMarkup", chat_id=chat_id, message_id=message_id,
+               reply_markup=keyboard(buttons or []))
+
+
+async def edit_text(chat_id: int, message_id: int, text: str) -> None:
+    await call("editMessageText", chat_id=chat_id, message_id=message_id, text=text,
+               disable_web_page_preview=True)
 
 
 async def send_voice(chat_id: int, audio: bytes, filename: str = "jared.mp3") -> None:
@@ -69,7 +93,7 @@ async def set_webhook(url: str, secret: str) -> None:
         "setWebhook",
         url=url,
         secret_token=secret,
-        allowed_updates=["message"],
+        allowed_updates=["message", "callback_query"],
         drop_pending_updates=False,
     )
 
@@ -82,6 +106,10 @@ async def set_commands() -> None:
             {"command": "fin", "description": "Cerrar la charla y guardar conclusiones"},
             {"command": "resumen", "description": "Resumen del día ahora"},
             {"command": "recordatorios", "description": "Ver recordatorios pendientes"},
+            {"command": "pendientes", "description": "Tareas abiertas (tocá ✅ para cerrarlas)"},
+            {"command": "presupuesto", "description": "Cómo vas con tus topes de gasto del mes"},
+            {"command": "costo", "description": "Cuánto llevo gastado en Claude este mes"},
+            {"command": "gmail", "description": "Conectar tu Gmail (solo lectura)"},
             {"command": "memoria", "description": "Lo último que anoté"},
             {"command": "voz", "description": "Respuestas en audio: /voz si | /voz no"},
             {"command": "ayuda", "description": "Qué puedo hacer"},

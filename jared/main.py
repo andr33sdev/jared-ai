@@ -7,10 +7,12 @@ import contextlib
 import logging
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
-from . import agent, config, db, scheduler, telegram, voice
-from .tools import when_label
+from datetime import timedelta
+
+from . import agent, config, db, gmail, scheduler, telegram, tools, usage, voice
+from .tools import now_local, when_label
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("jared")
@@ -23,10 +25,13 @@ HELP = """Soy Jared. Algunas cosas que puedo hacer por vos:
 • "¿Cuánto gasté este mes en nafta?"
 • "Buscame novedades sobre impresión 3D".
 • Mandame una foto de un ticket y lo anoto como gasto.
+• "Ya llamé al proveedor" → cierro esa tarea. /pendientes para verlas.
+• "Poneme un tope de 300 mil por mes en super" → te aviso al 80% y al 100%. /presupuesto
 • /charla para pensar en voz alta conmigo, /fin para cerrar y guardar conclusiones.
-• /voz si → te respondo con audios.
+• /voz si → te respondo con audios. /costo → cuánto voy gastando en Claude.
+• /gmail → conecto tu correo (solo lectura).
 
-Además, todas las mañanas te mando un resumen y a la tarde reviso si hay algo pendiente."""
+Lo que hago solo: resumen a la mañana, chequeo a la tarde, ayuda-memoria antes de cada reunión, resumen semanal el domingo y, los miércoles, te rescato una idea que quedó en el aire."""
 
 
 @contextlib.asynccontextmanager
@@ -68,6 +73,21 @@ async def health():
     return {"ok": True}
 
 
+@app.get("/google/callback")
+async def google_callback(code: str = "", state: str = "", error: str = ""):
+    ok = False
+    if code and not error:
+        try:
+            ok = await gmail.handle_callback(code, state)
+        except Exception:
+            log.exception("Falló el OAuth de Gmail")
+    if ok and config.settings.owner_id:
+        with contextlib.suppress(Exception):
+            await telegram.send_message(config.settings.owner_id, "📬 Listo, ya puedo leer tu Gmail (solo lectura).")
+    msg = "Gmail conectado. Ya podés cerrar esta pestaña. 🫡" if ok else "No se pudo conectar. Pedile a Jared un link nuevo con /gmail."
+    return HTMLResponse(f"<html><body style='font-family:sans-serif;padding:2em'><h2>{msg}</h2></body></html>")
+
+
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
     if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != config.settings.webhook_secret:
@@ -78,7 +98,7 @@ async def telegram_webhook(request: Request):
 
 
 async def _safe_handle(update: dict) -> None:
-    msg = update.get("message") or {}
+    msg = update.get("message") or (update.get("callback_query") or {}).get("message") or {}
     chat = (msg.get("chat") or {}).get("id")
     log.info("Update %s recibido del chat %s", update.get("update_id"), chat)
     try:
@@ -98,6 +118,9 @@ async def _safe_handle(update: dict) -> None:
 
 
 async def handle_update(update: dict) -> None:
+    if update.get("callback_query"):
+        await handle_callback(update["callback_query"])
+        return
     msg = update.get("message")
     if not msg:
         return
@@ -225,4 +248,109 @@ async def handle_command(chat_id: int, text: str) -> bool:
             lines = [f"• _{r['category']}_: {r['content']}" for r in rows]
             await telegram.send_message(chat_id, "**Lo último que anoté**\n" + "\n".join(lines))
         return True
+    if cmd == "/pendientes":
+        await send_open_tasks(chat_id)
+        return True
+    if cmd == "/presupuesto":
+        rows = await tools.budget_status()
+        if not rows:
+            await telegram.send_message(chat_id, "Todavía no hay topes. Decime, por ejemplo: \"tope de 300 mil por mes en super\".")
+        else:
+            lines = []
+            for r in rows:
+                icon = "🔴" if r["porcentaje"] >= 100 else "🟡" if r["porcentaje"] >= 80 else "🟢"
+                lines.append(f"{icon} {r['rubro']}: {r['gastado']:,.0f} / {r['tope']:,.0f} {r['moneda']} ({r['porcentaje']}%)")
+            await telegram.send_message(chat_id, f"**Presupuesto {now_local():%m/%Y}**\n" + "\n".join(lines))
+        return True
+    if cmd == "/costo":
+        u = await usage.summary()
+        await telegram.send_message(
+            chat_id,
+            f"**Uso de Claude (estimado)**\nHoy: US$ {u['hoy']:.2f}\nEste mes: US$ {u['mes']:.2f}"
+            f"\nProyección del mes: US$ {u['proyeccion']:.2f}\nBúsquedas web del mes: {u['busquedas']}",
+        )
+        return True
+    if cmd == "/gmail":
+        if not gmail.configured():
+            await telegram.send_message(
+                chat_id, "Para conectar Gmail primero hay que cargar GOOGLE_OAUTH_CLIENT_ID y "
+                         "GOOGLE_OAUTH_CLIENT_SECRET en Render (está en el README, paso 8).")
+        else:
+            link = await gmail.auth_link()
+            await telegram.send_message(
+                chat_id, f"Abrí este link, elegí tu cuenta y aceptá el permiso de solo lectura (vence en 15 min):\n{link}")
+        return True
     return False  # comando desconocido: que lo procese Jared como texto
+
+
+async def send_open_tasks(chat_id: int) -> None:
+    rows = await tools.open_tasks()
+    if not rows:
+        await telegram.send_message(chat_id, "No tenés tareas abiertas. Impecable. ✨")
+        return
+    lines = [f"{i}. {r['content']}" for i, r in enumerate(rows, 1)]
+    buttons = [[(f"✅ {i}", f"task:done:{r['id']}") for i, r in list(enumerate(rows, 1))[j:j + 5]]
+               for j in range(0, len(rows), 5)]
+    await telegram.send_message(chat_id, "**Tareas abiertas** (tocá ✅ para cerrar)\n" + "\n".join(lines),
+                                buttons=buttons)
+
+
+async def handle_callback(cb: dict) -> None:
+    s = config.settings
+    if (cb.get("from") or {}).get("id") != s.owner_id:
+        await telegram.answer_callback(cb["id"])
+        return
+    msg = cb.get("message") or {}
+    chat_id = msg["chat"]["id"]
+    message_id = msg["message_id"]
+    original = msg.get("text") or ""
+    parts = (cb.get("data") or "").split(":")
+    kind, action = parts[0], parts[1] if len(parts) > 1 else ""
+    ref = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+
+    if kind == "rem":
+        row = await db.fetchrow("select text from reminders where id = %s", ref)
+        if action == "done" or not row:
+            status = "✅ Hecho"
+        else:
+            if action == "1h":
+                due = now_local() + timedelta(hours=1)
+            else:
+                hhmm = parts[3] if len(parts) > 3 else "0900"
+                due = (now_local() + timedelta(days=1)).replace(
+                    hour=int(hhmm[:2]), minute=int(hhmm[2:]), second=0, microsecond=0)
+            await db.execute("insert into reminders (text, due_at) values (%s, %s)", row["text"], due)
+            status = f"⏳ Pospuesto para {when_label(due)}"
+        await telegram.answer_callback(cb["id"], status)
+        await telegram.edit_text(chat_id, message_id, f"{original}\n\n{status}")
+        return
+
+    if kind == "task":
+        result = await tools.completar_tarea(ref)
+        await telegram.answer_callback(cb["id"], "✅ Tarea cerrada" if '"ok": true' in result else "Ya estaba cerrada")
+        markup = (msg.get("reply_markup") or {}).get("inline_keyboard", [])
+        rows = [[(b["text"], b["callback_data"]) for b in row if b.get("callback_data") != cb.get("data")]
+                for row in markup]
+        rows = [r for r in rows if r]
+        await telegram.edit_buttons(chat_id, message_id, rows)
+        return
+
+    if kind == "idea":
+        estados = {"go": ("en_marcha", "🚀 Vamos con esa"), "no": ("descartada", "🗑 Descartada"),
+                   "later": ("pospuesta", "⏳ La vuelvo a traer en un mes")}
+        estado, status = estados.get(action, ("pospuesta", "⏳ Más adelante"))
+        await tools.marcar_idea(ref, estado)
+        await telegram.answer_callback(cb["id"], status)
+        await telegram.edit_text(chat_id, message_id, f"{original}\n\n{status}")
+        if action == "go":
+            row = await db.fetchrow("select content from memories where id = %s", ref)
+            async with telegram.typing(chat_id):
+                reply = await agent.run(
+                    f"(Andrés tocó 'Avanzar' en la idea [{ref}]: {row['content'] if row else ''}. "
+                    "Ayudalo a definir el primer paso concreto: hacé UNA pregunta para arrancar.)",
+                    record_as="(eligió avanzar con una idea)",
+                )
+            await telegram.send_message(chat_id, reply)
+        return
+
+    await telegram.answer_callback(cb["id"])
