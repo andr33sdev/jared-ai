@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from datetime import date, timedelta
 
-from . import agent, config, db, extras, gmail, scheduler, telegram, tools, usage, voice
+from . import agent, call, config, db, extras, gmail, scheduler, telegram, tools, usage, voice
 from .tools import now_local, when_label
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -44,6 +44,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(call.router)
 
 
 @app.get("/")

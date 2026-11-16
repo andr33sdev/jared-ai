@@ -454,3 +454,64 @@ async def test_model_routing_and_cache(database, monkeypatch):
     await extras.modo_charla(True)
     await agent.run("Quiero pensar en voz alta")
     assert fake.calls[2]["model"] == "claude-sonnet-5-5"
+
+
+# --- llamada por voz --------------------------------------------------------
+
+async def test_voice_cap_and_fallback(database, monkeypatch, sent):
+    from jared import voice
+    monkeypatch.setattr(config.settings, "elevenlabs_api_key", "k")
+    monkeypatch.setattr(config.settings, "elevenlabs_voice_id", "v")
+    monkeypatch.setattr(config.settings, "elevenlabs_monthly_chars", 100)
+
+    async def fake_eleven(text):
+        return b"PREMIUM"
+
+    async def fake_free(text):
+        return b"GRATIS"
+
+    monkeypatch.setattr(voice, "eleven_synthesize", fake_eleven)
+    monkeypatch.setattr(voice, "synthesize", fake_free)
+    audio, engine = await voice.speak("x" * 60)
+    assert (audio, engine) == (b"PREMIUM", "premium") and sent == []
+    audio, engine = await voice.speak("y" * 35)  # 95 -> pasa el 90%
+    assert engine == "premium" and "90%" in sent[0][1]
+    audio, engine = await voice.speak("z" * 10)  # superaría el tope
+    assert (audio, engine) == (b"GRATIS", "gratis")
+    audio, engine = await voice.speak("hola", prefer="gratis")
+    assert engine == "gratis"
+    assert await voice.eleven_used() == 95
+
+
+async def test_call_flow(database, monkeypatch, sent):
+    import httpx
+    from jared import call, voice
+    from jared.main import app
+
+    async def fake_speak(text, prefer="premium"):
+        return b"MP3", "gratis"
+
+    monkeypatch.setattr(voice, "speak", fake_speak)
+    fake = FakeClaude([
+        _msg([TextBlock(type="text", text="Hola Andrés, te escucho.")], "end_turn"),
+        _msg([TextBlock(type="text", text="Anotado, mañana te lo recuerdo.")], "end_turn"),
+        _msg([TextBlock(type="text", text="• Pediste recordar llamar al proveedor")], "end_turn"),
+    ])
+    monkeypatch.setattr(agent, "client", lambda: fake)
+    link = await call.call_link() if config.settings.public_url else None
+    token = await call.call_token()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+        assert (await c.get("/llamada")).status_code == 200
+        assert (await c.post("/api/llamada/inicio", json={})).status_code == 403
+        h = {"X-Call-Token": token}
+        r = await c.post("/api/llamada/inicio", json={"voz": "gratis"}, headers=h)
+        assert r.json()["texto"] == "Hola Andrés, te escucho." and r.json()["audio"] == "TVAz"
+        r = await c.post("/api/llamada/turno", json={"texto": "Recordame llamar al proveedor"}, headers=h)
+        assert "Anotado" in r.json()["texto"]
+        assert "Llamada de voz" in fake.calls[1]["system"][1]["text"]
+        assert fake.calls[1]["model"] == config.settings.model
+        r = await c.post("/api/llamada/fin", headers=h)
+        assert r.json()["ok"]
+    assert "Resumen de la llamada" in sent[-1][1]
+    assert "Recordame llamar al proveedor" in fake.calls[2]["messages"][-1]["content"][-1]["text"]

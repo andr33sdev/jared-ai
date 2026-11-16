@@ -253,9 +253,29 @@ async def respuestas_en_audio(activo: bool) -> str:
 async def ver_costo() -> str:
     from . import usage
     u = await usage.summary()
-    return _out({"hoy_usd": round(u["hoy"], 2), "mes_usd": round(u["mes"], 2),
+    from . import voice
+    chars = await voice.eleven_used()
+    return _out({"voz_premium_mes_usd": round(chars * voice.ELEVEN_PRICE_PER_1K / 1000, 2),
+                 "voz_premium_caracteres_mes": chars,
+                 "voz_premium_tope_caracteres": config.settings.elevenlabs_monthly_chars,
+                 "hoy_usd": round(u["hoy"], 2), "mes_usd": round(u["mes"], 2),
                  "proyeccion_mes_usd": round(u["proyeccion"], 2), "busquedas_web_mes": u["busquedas"],
                  "nota": "estimado propio, no es la factura de Anthropic"})
+
+
+async def link_llamada(nuevo: bool = False) -> str:
+    from . import call, telegram
+    if nuevo:
+        await db.kv_set("call_token", None)
+    link = await call.call_link()
+    if not link:
+        return _out({"error": "Falta la URL pública del servidor (PUBLIC_URL)."})
+    await telegram.send_message(
+        config.settings.owner_id,
+        "📞 Tocá para llamarme. Funciona mejor en Chrome; podés agregarlo a la pantalla de inicio.",
+        buttons=[[("📞 Llamar a Jared", link)]],
+    )
+    return _out({"ok": True, "nota": "Ya le mandé el botón para llamar. Respondé solo una línea breve o nada."})
 
 
 async def ver_esperas() -> str:
@@ -391,7 +411,8 @@ DEFS += [
     {
         "name": "modo_charla",
         "description": (
-            "Activa el modo charla cuando Andrés quiere pensar en voz alta, charlar un tema o 'llamarte'. "
+            "Activa el modo charla (por Telegram) cuando Andrés quiere pensar en voz alta o charlar un tema largo. "
+            "Si quiere hablarte por VOZ ('te llamo'), usá link_llamada. "
             "Desactivalo cuando diga que terminó, después de hacer el cierre."
         ),
         "input_schema": {"type": "object", "properties": {"activo": {"type": "boolean"}}, "required": ["activo"]},
@@ -405,6 +426,15 @@ DEFS += [
         "name": "ver_costo",
         "description": "Cuánto se lleva gastado en la API de Claude hoy y este mes (estimado).",
         "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "link_llamada",
+        "description": (
+            "Le manda a Andrés el botón para llamarte por voz (página de llamada). Usala cuando diga "
+            "'te llamo', 'llamame', 'quiero hablar por voz'. Con nuevo=true genera un link nuevo e invalida el anterior "
+            "(si dice que lo compartió o lo perdió)."
+        ),
+        "input_schema": {"type": "object", "properties": {"nuevo": {"type": "boolean", "default": False}}},
     },
     {
         "name": "ver_esperas",
@@ -422,6 +452,7 @@ DEFS += [
 ]
 
 HANDLERS = {
+    "link_llamada": link_llamada,
     "modo_charla": modo_charla,
     "respuestas_en_audio": respuestas_en_audio,
     "ver_costo": ver_costo,

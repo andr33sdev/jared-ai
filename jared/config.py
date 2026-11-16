@@ -43,6 +43,10 @@ class Settings:
     dates_time: str
     waits_time: str
     habits_time: str
+    elevenlabs_api_key: str | None
+    elevenlabs_voice_id: str | None
+    elevenlabs_model: str
+    elevenlabs_monthly_chars: int
 
     @property
     def tz(self) -> ZoneInfo:
@@ -89,6 +93,11 @@ def load() -> Settings:
         dates_time=_env("DATES_TIME", "09:30"),
         waits_time=_env("WAITS_TIME", "10:00"),
         habits_time=_env("HABITS_TIME", "21:30"),
+        elevenlabs_api_key=_env("ELEVENLABS_API_KEY"),
+        elevenlabs_voice_id=_env("ELEVENLABS_VOICE_ID"),
+        elevenlabs_model=_env("ELEVENLABS_MODEL", "eleven_flash_v2_5"),
+        # 100.000 caracteres ≈ USD 4 por mes con Flash
+        elevenlabs_monthly_chars=int(_env("ELEVENLABS_MONTHLY_CHARS", "100000")),
     )
 
 

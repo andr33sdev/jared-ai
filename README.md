@@ -79,11 +79,19 @@ Usa tu cuenta personal en modo **solo lectura**: Jared nunca manda, borra ni mue
 5. Copiá el *Client ID* y el *Client secret* en Render como `GOOGLE_OAUTH_CLIENT_ID` y `GOOGLE_OAUTH_CLIENT_SECRET`.
 6. En Telegram mandale `/gmail` a Jared, abrí el link y aceptá. Google te va a avisar que la app no está verificada: es tu propia app, así que tocá **Configuración avanzada → Ir a Jared**.
 
+### 9. Llamada por voz (opcional, recomendado)
+Decile a Jared "te llamo" y te manda un botón 📞. Se abre una página donde hablás de corrido, sin apretar nada, y Jared te contesta en voz alta. Usa la misma memoria y, al colgar, te manda el resumen por Telegram.
+- Funciona mejor en **Chrome en Android**: tu voz se pasa a texto en el navegador, gratis. En otros navegadores se mantiene apretado el círculo para hablar, y en ese caso hace falta `GROQ_API_KEY`.
+- **Voz premium (ElevenLabs):** creá una cuenta en elevenlabs.io → **API Keys** → `ELEVENLABS_API_KEY`. En **Voices → Explore** filtrá por *Spanish* y acento *Argentinian*, elegí una voz masculina y copiá su *Voice ID* → `ELEVENLABS_VOICE_ID`.
+- **Tope de gasto:** `ELEVENLABS_MONTHLY_CHARS` (por defecto 100.000 caracteres, unos USD 4). Al 90 % te avisa, y al llegar al tope sigue con la voz gratis hasta el mes siguiente. Desde la página podés cambiar entre la voz premium y la gratis.
+- Si compartiste el link sin querer, decile "generá un link nuevo de llamada" y el anterior deja de funcionar.
+
 ---
 
 ## Uso
 No hay comandos: a Jared le hablás como a una persona. Por ejemplo:
-- "Charlemos un rato" para pensar en voz alta, y "listo, cerremos" para que haga el cierre.
+- "Te llamo" te manda el botón para hablarle por voz en vivo.
+- "Charlemos un rato" para pensar en voz alta por escrito o con audios, y "listo, cerremos" para que haga el cierre.
 - "¿Qué tengo pendiente?" te muestra las tareas con botones para cerrarlas.
 - "¿Qué me tienen que mandar?", "¿qué recordatorios tengo?", "¿cómo voy con la plata?"
 - "Respondeme con audios" o "volvé al texto".
@@ -103,7 +111,7 @@ Los horarios automáticos se cambian con `BRIEF_TIME`, `CHECKIN_TIME`, `REFLECTI
 - Si un día preferís que todo use Sonnet, cambiá `JARED_MODEL` a `claude-sonnet-5-5`.
 
 ## Límites conocidos
-- Los bots de Telegram no pueden hacer llamadas de voz reales. Lo de "llamarlo" se resuelve con el modo charla y audios de ida y vuelta.
+- Los bots de Telegram no pueden hacer llamadas de voz, por eso la llamada es una página web aparte. Entre que terminás de hablar y Jared responde pasan 2 o 3 segundos.
 - En Render gratis, si el despertador falla, el primer mensaje puede tardar alrededor de un minuto mientras el servidor arranca.
 
 ## Desarrollo

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Jared">
+<title>Llamar a Jared</title>
+<style>
+  :root { --bg:#0f1115; --fg:#eef0f3; --muted:#8a919c; --accent:#6c8cff; --think:#f4b740; --talk:#3ecf8e; --hang:#e5484d; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { min-height:100%; display:flex; flex-direction:column; align-items:center;
+    justify-content:space-between; padding:max(24px, env(safe-area-inset-top)) 24px max(28px, env(safe-area-inset-bottom)); }
+  header { text-align:center; }
+  h1 { font-size:22px; font-weight:600; margin:8px 0 4px; letter-spacing:.2px; }
+  #status { color:var(--muted); font-size:15px; min-height:20px; }
+  #orb { width:190px; height:190px; border-radius:50%; border:none; cursor:pointer;
+    background:radial-gradient(circle at 35% 30%, #8ea6ff, var(--accent) 60%, #3d55c9);
+    box-shadow:0 0 0 0 rgba(108,140,255,.5); transition:transform .2s, background .3s; color:#fff;
+    font-size:17px; font-weight:600; }
+  #orb:active { transform:scale(.97); }
+  #orb.listening { animation:pulse 1.6s infinite; }
+  #orb.thinking { background:radial-gradient(circle at 35% 30%, #ffd57a, var(--think) 60%, #c98a12); animation:breathe 1.2s infinite; }
+  #orb.speaking { background:radial-gradient(circle at 35% 30%, #7ef0bd, var(--talk) 60%, #1f9a65); animation:breathe .9s infinite; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(108,140,255,.55)} 70%{box-shadow:0 0 0 28px rgba(108,140,255,0)} 100%{box-shadow:0 0 0 0 rgba(108,140,255,0)} }
+  @keyframes breathe { 0%,100%{transform:scale(1)} 50%{transform:scale(1.05)} }
+  #lines { width:100%; max-width:520px; min-height:110px; text-align:center; }
+  #you { color:var(--muted); font-size:15px; margin-bottom:10px; }
+  #jared { font-size:18px; line-height:1.4; }
+  footer { display:flex; flex-direction:column; align-items:center; gap:14px; }
+  #hang { background:var(--hang); color:#fff; border:none; border-radius:999px; padding:14px 34px;
+    font-size:16px; font-weight:600; cursor:pointer; display:none; }
+  #voice { background:none; border:none; color:var(--muted); font-size:13px; text-decoration:underline; cursor:pointer; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Jared</h1>
+    <div id="status">Tocá el círculo para llamar</div>
+  </header>
+
+  <button id="orb" aria-label="Llamar">Llamar</button>
+
+  <section id="lines">
+    <div id="you"></div>
+    <div id="jared"></div>
+  </section>
+
+  <footer>
+    <button id="hang">Colgar</button>
+    <button id="voice"></button>
+  </footer>
+</main>
+
+<script>
+(() => {
+  const params = new URLSearchParams(location.search);
+  const token = params.get("k") || localStorage.getItem("jared_k");
+  if (params.get("k")) localStorage.setItem("jared_k", params.get("k"));
+
+  const $ = (id) => document.getElementById(id);
+  const orb = $("orb"), statusEl = $("status"), you = $("you"), jaredEl = $("jared");
+  const hang = $("hang"), voiceBtn = $("voice");
+
+  let voice = localStorage.getItem("jared_voice") || "premium";
+  const renderVoice = () => voiceBtn.textContent = voice === "premium" ? "Voz: premium · cambiar a gratis" : "Voz: gratis · cambiar a premium";
+  renderVoice();
+  voiceBtn.onclick = () => { voice = voice === "premium" ? "gratis" : "premium"; localStorage.setItem("jared_voice", voice); renderVoice(); };
+
+  if (!token) {
+    statusEl.textContent = "Falta el link privado. Pedile a Jared por Telegram: \"te llamo\".";
+    orb.disabled = true;
+    return;
+  }
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const player = new Audio();
+  let state = "idle";          // idle | listening | thinking | speaking | ended
+  let rec = null, buffer = "", silenceTimer = null;
+  let recorder = null, chunks = [];
+
+  function setState(s, text) {
+    state = s;
+    orb.className = s;
+    const labels = { idle: "Llamar", listening: SR ? "" : "Mantené para hablar", thinking: "", speaking: "", ended: "Llamar" };
+    orb.textContent = labels[s] ?? "";
+    statusEl.textContent = text;
+    hang.style.display = (s === "idle" || s === "ended") ? "none" : "inline-block";
+  }
+
+  async function api(path, body, isForm) {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: isForm ? { "X-Call-Token": token } : { "Content-Type": "application/json", "X-Call-Token": token },
+      body: isForm ? body : JSON.stringify(body || {}),
+    });
+    if (res.status === 403) throw new Error("El link venció. Pedile uno nuevo a Jared.");
+    if (!res.ok) throw new Error("Algo falló del lado de Jared (" + res.status + ").");
+    return res.json();
+  }
+
+  function play(data) {
+    jaredEl.textContent = data.texto || "";
+    if (!data.audio) { listen(); return; }
+    setState("speaking", "Jared está hablando · tocá para interrumpir");
+    player.src = "data:audio/mpeg;base64," + data.audio;
+    player.onended = () => { if (state === "speaking") listen(); };
+    player.play().catch(() => listen());
+  }
+
+  async function send(text) {
+    you.textContent = text;
+    jaredEl.textContent = "";
+    setState("thinking", "Pensando…");
+    try { play(await api("/api/llamada/turno", { texto: text, voz: voice })); }
+    catch (e) { statusEl.textContent = e.message; setTimeout(listen, 1500); }
+  }
+
+  // --- escuchar con el reconocimiento de voz del navegador ---
+  function listen() {
+    if (state === "ended") return;
+    buffer = "";
+    setState("listening", SR ? "Te escucho…" : "Mantené apretado el círculo mientras hablás");
+    if (!SR) return;
+    try { rec && rec.abort(); } catch (_) {}
+    rec = new SR();
+    rec.lang = "es-AR";
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.onresult = (ev) => {
+      let interim = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const r = ev.results[i];
+        if (r.isFinal) buffer += r[0].transcript + " ";
+        else interim += r[0].transcript;
+      }
+      you.textContent = (buffer + interim).trim();
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(finishTurn, 1300);
+    };
+    rec.onerror = (ev) => {
+      if (ev.error === "not-allowed") statusEl.textContent = "Necesito permiso para usar el micrófono.";
+    };
+    rec.onend = () => { if (state === "listening") { try { rec.start(); } catch (_) {} } };
+    try { rec.start(); } catch (_) {}
+  }
+
+  function finishTurn() {
+    const text = buffer.trim() || you.textContent.trim();
+    if (!text || state !== "listening") return;
+    state = "thinking";
+    try { rec && rec.abort(); } catch (_) {}
+    send(text);
+  }
+
+  // --- alternativa: grabar y mandar el audio (navegadores sin reconocimiento) ---
+  async function startRecording() {
+    if (state !== "listening" || SR) return;
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    chunks = [];
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = (e) => chunks.push(e.data);
+    recorder.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+      if (blob.size < 2000) { listen(); return; }
+      setState("thinking", "Pensando…");
+      const form = new FormData();
+      form.append("audio", blob, "voz");
+      try {
+        const data = await api("/api/llamada/audio?voz=" + voice, form, true);
+        you.textContent = data.oido || "";
+        if (!data.oido) { statusEl.textContent = "No te escuché bien, probá de nuevo."; listen(); return; }
+        play(data);
+      } catch (e) { statusEl.textContent = e.message; setTimeout(listen, 1500); }
+    };
+    recorder.start();
+    statusEl.textContent = "Grabando… soltá cuando termines";
+  }
+  function stopRecording() { if (recorder && recorder.state === "recording") recorder.stop(); }
+
+  // --- botones ---
+  orb.addEventListener("click", async () => {
+    if (state === "idle" || state === "ended") {
+      you.textContent = ""; jaredEl.textContent = "";
+      player.src = "data:audio/mpeg;base64,"; player.play().catch(() => {}); // habilita el audio en iPhone
+      setState("thinking", "Llamando…");
+      try { play(await api("/api/llamada/inicio", { voz: voice })); }
+      catch (e) { setState("idle", e.message); }
+    } else if (state === "speaking") {
+      player.pause();
+      listen();
+    } else if (state === "listening" && SR) {
+      finishTurn();
+    }
+  });
+  orb.addEventListener("pointerdown", () => { if (!SR) startRecording(); });
+  orb.addEventListener("pointerup", () => { if (!SR) stopRecording(); });
+  orb.addEventListener("pointerleave", () => { if (!SR) stopRecording(); });
+
+  hang.addEventListener("click", async () => {
+    const wasActive = state !== "idle" && state !== "ended";
+    state = "ended";
+    try { rec && rec.abort(); } catch (_) {}
+    player.pause();
+    stopRecording();
+    setState("ended", "Llamada terminada. Te mando el resumen por Telegram.");
+    if (wasActive) { try { await api("/api/llamada/fin"); } catch (_) {} }
+  });
+})();
+</script>
+</body>
+</html>

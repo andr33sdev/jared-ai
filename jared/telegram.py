@@ -35,7 +35,10 @@ async def call(method: str, **params) -> dict:
 
 def keyboard(rows: list[list[tuple[str, str]]]) -> dict:
     """[[('✅ Hecho', 'rem:done:3'), ...], ...] -> inline_keyboard de Telegram."""
-    return {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row] for row in rows]}
+    def button(t: str, d: str) -> dict:
+        return {"text": t, "url": d} if d.startswith("https://") else {"text": t, "callback_data": d}
+
+    return {"inline_keyboard": [[button(t, d) for t, d in row] for row in rows]}
 
 
 async def send_message(chat_id: int, text: str, buttons: list[list[tuple[str, str]]] | None = None) -> None:
