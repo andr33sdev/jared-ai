@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: jared
+    runtime: python
+    plan: free
+    region: virginia
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn jared.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: TIMEZONE
+        value: America/Argentina/Buenos_Aires
+      - key: OWNER_NAME
+        value: Andrés
+      - key: JARED_MODEL
+        value: claude-sonnet-5-5
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_OWNER_ID
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: GOOGLE_CALENDAR_ID
+        sync: false
