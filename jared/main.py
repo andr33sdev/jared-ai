@@ -17,27 +17,6 @@ from .tools import now_local, when_label
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("jared")
 
-HELP = """Soy Jared. Algunas cosas que puedo hacer por vos:
-
-• Hablame normal (texto o audio): voy anotando ideas, gastos, tareas, intereses y personas.
-• "Recordame mañana a las 9 llamar al proveedor" → te escribo a esa hora.
-• "¿Qué tengo esta semana?" / "Agendá reunión el jueves 15hs".
-• "¿Cuánto gasté este mes en nafta?"
-• "Buscame novedades sobre impresión 3D".
-• Mandame una foto de un ticket y lo anoto como gasto.
-• "Ya llamé al proveedor" → cierro esa tarea. /pendientes para verlas.
-• "Poneme un tope de 300 mil por mes en super" → te aviso al 80% y al 100%. /presupuesto
-• /charla para pensar en voz alta conmigo, /fin para cerrar y guardar conclusiones.
-• /voz si → te respondo con audios. /costo → cuánto voy gastando en Claude.
-• /gmail → conecto tu correo (solo lectura).
-• /minuta y me contás una reunión → armo la minuta, tus tareas y lo que deben otros. /esperando
-• Mandame un PDF → lo resumo, lo guardo y después te respondo preguntas sobre él.
-• Cumpleaños y vencimientos → te aviso antes. /fechas
-• Hábitos → cada noche te pregunto con botones y llevo tus rachas. /habitos
-
-Lo que hago solo: resumen a la mañana, chequeo a la tarde, ayuda-memoria antes de cada reunión, resumen semanal el domingo y, los miércoles, te rescato una idea que quedó en el aire."""
-
-
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     s = config.settings
@@ -207,14 +186,8 @@ async def handle_update(update: dict) -> None:
         await telegram.send_message(chat_id, "Por ahora entiendo texto, audios y fotos.")
         return
 
-    extra = ""
-    if await db.kv_get("minuta_next", False):
-        await db.kv_set("minuta_next", False)
-        extra = ("IMPORTANTE: este mensaje es el relato de una reunión. Armá la minuta con guardar_minuta "
-                 "y mostrásela prolija y corta.")
     async with telegram.typing(chat_id):
-        reply = await agent.run(content, extra_system=extra,
-                                record_as=text if msg.get("document") else None)
+        reply = await agent.run(content, record_as=text if msg.get("document") else None)
     if not reply:
         reply = "Listo."
     await telegram.send_message(chat_id, reply)
@@ -227,115 +200,22 @@ async def handle_update(update: dict) -> None:
 
 
 async def handle_command(chat_id: int, text: str) -> bool:
-    """Devuelve True si el comando se resolvió acá."""
-    cmd, _, arg = text.partition(" ")
-    cmd = cmd.split("@")[0].lower()
-    arg = arg.strip().lower()
+    """Solo quedan los comandos de sistema. Todo lo demás se habla con Jared.
+    Devuelve True si el comando se resolvió acá."""
+    cmd = text.partition(" ")[0].split("@")[0].lower()
 
-    if cmd in ("/start", "/ayuda", "/help"):
-        await telegram.send_message(chat_id, HELP)
-        return True
-    if cmd == "/voz":
-        on = arg in ("si", "sí", "on", "1", "")
-        await db.kv_set("voice_replies", on)
-        await telegram.send_message(chat_id, "Perfecto, te respondo con audio. 🎙️" if on else "Vuelvo al texto.")
-        return True
-    if cmd == "/charla":
-        await db.kv_set("mode", "charla")
+    if cmd == "/start":
         async with telegram.typing(chat_id):
             reply = await agent.run(
-                "(Andrés abrió una charla con /charla. Saludalo breve y preguntale de qué quiere hablar, "
-                "o proponé un tema pendiente si hay alguno claro.)",
-                record_as="(abrió una charla)",
+                "(Andrés abrió el chat. Saludalo breve y contale en 2 o 3 líneas, hablando natural, "
+                "qué podés hacer por él. Aclarale que no hacen falta comandos: te habla como a una persona.)",
+                record_as="(abrió el chat)",
             )
-        await telegram.send_message(chat_id, reply)
-        return True
-    if cmd == "/fin":
-        async with telegram.typing(chat_id):
-            reply = await agent.run(
-                "(Andrés cerró la charla con /fin. Hacé un cierre: resumen corto de lo conversado, "
-                "conclusiones, ideas y próximos pasos concretos. Asegurate de que todo lo importante "
-                "quedó guardado en memoria, y ofrecé recordatorios para los próximos pasos.)",
-                record_as="(cerró la charla)",
-            )
-        await db.kv_set("mode", None)
         await telegram.send_message(chat_id, reply)
         return True
     if cmd == "/resumen":
         async with telegram.typing(chat_id):
             await scheduler.morning_brief()
-        return True
-    if cmd == "/recordatorios":
-        rows = await db.fetch(
-            "select id, text, due_at, recurrence from reminders where not done order by due_at limit 30"
-        )
-        if not rows:
-            await telegram.send_message(chat_id, "No tenés recordatorios pendientes. Todo en orden. ✨")
-        else:
-            lines = [f"• {when_label(r['due_at'])} — {r['text']}"
-                     + ("" if r["recurrence"] == "none" else " 🔁") for r in rows]
-            await telegram.send_message(chat_id, "**Recordatorios pendientes**\n" + "\n".join(lines))
-        return True
-    if cmd == "/memoria":
-        rows = await db.fetch(
-            "select category, content from memories where active order by created_at desc limit 15"
-        )
-        if not rows:
-            await telegram.send_message(chat_id, "Todavía no anoté nada. Contame cosas. 📝")
-        else:
-            lines = [f"• _{r['category']}_: {r['content']}" for r in rows]
-            await telegram.send_message(chat_id, "**Lo último que anoté**\n" + "\n".join(lines))
-        return True
-    if cmd == "/minuta":
-        await db.kv_set("minuta_next", True)
-        await telegram.send_message(chat_id, "Te escucho. Contame (mejor en audio) cómo fue la reunión: quiénes estaban, qué se decidió y quién hace qué. 📝")
-        return True
-    if cmd == "/esperando":
-        rows = await extras.open_waits()
-        if not rows:
-            await telegram.send_message(chat_id, "No estás esperando nada de nadie. ✨")
-        else:
-            lines = [f"• {r['content']} — {r['happened_on']:%d/%m}" for r in rows]
-            await telegram.send_message(chat_id, "**Esperando de otros**\n" + "\n".join(lines))
-        return True
-    if cmd == "/fechas":
-        rows = await extras.upcoming_dates(60)
-        if not rows:
-            await telegram.send_message(chat_id, "No hay fechas importantes en los próximos 60 días. Pasame cumpleaños y vencimientos y los cuido yo.")
-        else:
-            lines = [f"• {r['proxima']:%d/%m} — {r['content']}" + (" (¡hoy!)" if r["faltan"] == 0 else f" (en {r['faltan']} días)")
-                     for r in rows]
-            await telegram.send_message(chat_id, "**Próximas fechas**\n" + "\n".join(lines))
-        return True
-    if cmd == "/habitos":
-        rows = await extras.habit_report()
-        if not rows:
-            await telegram.send_message(chat_id, "Todavía no definimos hábitos. Decime cuáles querés seguir (ej: agua, caminar, leer).")
-        else:
-            lines = [f"• {r['habito']}: {r['semana']}  🔥 {r['racha']}" for r in rows]
-            await telegram.send_message(chat_id, "**Hábitos (últimos 7 días)**\n" + "\n".join(lines))
-        return True
-    if cmd == "/pendientes":
-        await send_open_tasks(chat_id)
-        return True
-    if cmd == "/presupuesto":
-        rows = await tools.budget_status()
-        if not rows:
-            await telegram.send_message(chat_id, "Todavía no hay topes. Decime, por ejemplo: \"tope de 300 mil por mes en super\".")
-        else:
-            lines = []
-            for r in rows:
-                icon = "🔴" if r["porcentaje"] >= 100 else "🟡" if r["porcentaje"] >= 80 else "🟢"
-                lines.append(f"{icon} {r['rubro']}: {r['gastado']:,.0f} / {r['tope']:,.0f} {r['moneda']} ({r['porcentaje']}%)")
-            await telegram.send_message(chat_id, f"**Presupuesto {now_local():%m/%Y}**\n" + "\n".join(lines))
-        return True
-    if cmd == "/costo":
-        u = await usage.summary()
-        await telegram.send_message(
-            chat_id,
-            f"**Uso de Claude (estimado)**\nHoy: US$ {u['hoy']:.2f}\nEste mes: US$ {u['mes']:.2f}"
-            f"\nProyección del mes: US$ {u['proyeccion']:.2f}\nBúsquedas web del mes: {u['busquedas']}",
-        )
         return True
     if cmd == "/gmail":
         if not gmail.configured():
@@ -347,19 +227,7 @@ async def handle_command(chat_id: int, text: str) -> bool:
             await telegram.send_message(
                 chat_id, f"Abrí este link, elegí tu cuenta y aceptá el permiso de solo lectura (vence en 15 min):\n{link}")
         return True
-    return False  # comando desconocido: que lo procese Jared como texto
-
-
-async def send_open_tasks(chat_id: int) -> None:
-    rows = await tools.open_tasks()
-    if not rows:
-        await telegram.send_message(chat_id, "No tenés tareas abiertas. Impecable. ✨")
-        return
-    lines = [f"{i}. {r['content']}" for i, r in enumerate(rows, 1)]
-    buttons = [[(f"✅ {i}", f"task:done:{r['id']}") for i, r in list(enumerate(rows, 1))[j:j + 5]]
-               for j in range(0, len(rows), 5)]
-    await telegram.send_message(chat_id, "**Tareas abiertas** (tocá ✅ para cerrar)\n" + "\n".join(lines),
-                                buttons=buttons)
+    return False  # cualquier otra cosa con "/" la interpreta Jared como texto
 
 
 async def handle_callback(cb: dict) -> None:

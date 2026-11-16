@@ -102,21 +102,8 @@ async def set_commands() -> None:
     await call(
         "setMyCommands",
         commands=[
-            {"command": "charla", "description": "Empezar una charla para pensar en voz alta"},
-            {"command": "fin", "description": "Cerrar la charla y guardar conclusiones"},
             {"command": "resumen", "description": "Resumen del día ahora"},
-            {"command": "recordatorios", "description": "Ver recordatorios pendientes"},
-            {"command": "pendientes", "description": "Tareas abiertas (tocá ✅ para cerrarlas)"},
-            {"command": "minuta", "description": "Contame una reunión y armo la minuta"},
-            {"command": "esperando", "description": "Lo que otros te deben"},
-            {"command": "fechas", "description": "Cumpleaños y vencimientos próximos"},
-            {"command": "habitos", "description": "Tus hábitos y rachas"},
-            {"command": "presupuesto", "description": "Cómo vas con tus topes de gasto del mes"},
-            {"command": "costo", "description": "Cuánto llevo gastado en Claude este mes"},
             {"command": "gmail", "description": "Conectar tu Gmail (solo lectura)"},
-            {"command": "memoria", "description": "Lo último que anoté"},
-            {"command": "voz", "description": "Respuestas en audio: /voz si | /voz no"},
-            {"command": "ayuda", "description": "Qué puedo hacer"},
         ],
     )
 

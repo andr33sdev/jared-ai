@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import pytest
 from anthropic.types import Message, TextBlock, ToolUseBlock, Usage
 
-from jared import agent, config, db, scheduler, tools
+from jared import agent, config, db, extras, scheduler, tools
 from jared.main import handle_update
 from jared.textfmt import md_to_tg_html, split_text
 
@@ -140,9 +140,12 @@ async def test_handle_update_owner_and_stranger(database, sent, monkeypatch):
     await handle_update({"update_id": 2, "message": {"chat": {"id": 7, "type": "private"},
                                                       "from": {"id": 7}, "text": "hola"}})
     assert sent[-1][0] == 7 and "exclusivamente" in sent[-1][1]
+    # un "comando" viejo ya no existe: lo interpreta Jared como texto
+    fake2 = FakeClaude([_msg([TextBlock(type="text", text="No tenés recordatorios.")], "end_turn")])
+    monkeypatch.setattr(agent, "client", lambda: fake2)
     await handle_update({"update_id": 3, "message": {"chat": {"id": 42, "type": "private"},
                                                       "from": {"id": 42}, "text": "/recordatorios"}})
-    assert "No tenés recordatorios" in sent[-1][1]
+    assert fake2.calls and sent[-1][1] == "No tenés recordatorios."
 
 
 async def test_checkin_nada_is_silent(database, sent, monkeypatch):
@@ -246,8 +249,7 @@ async def test_reminder_buttons(database, tg_calls):
 async def test_tasks_and_button(database, tg_calls):
     await tools.guardar_memoria("tarea", "Llamar al proveedor de resina")
     await tools.guardar_memoria("tarea", "Pedir presupuesto de moldes")
-    await handle_update({"update_id": 5, "message": {"chat": {"id": 42, "type": "private"},
-                                                      "from": {"id": 42}, "text": "/pendientes"}})
+    await extras.mostrar_pendientes()
     send = [p for m, p in tg_calls if m == "sendMessage"][-1]
     assert "Llamar al proveedor" in send["text"]
     kb = send["reply_markup"]["inline_keyboard"]
@@ -423,3 +425,13 @@ async def test_habits(database, tg_calls):
     assert edit["reply_markup"]["inline_keyboard"][1][0]["text"] == "✅ Caminar"
     report = await extras.habit_report()
     assert report[0]["racha"] == 2 and report[0]["semana"].endswith("✅✅")
+
+
+async def test_natural_language_modes(database):
+    await extras.modo_charla(True)
+    assert await db.kv_get("mode") == "charla"
+    await extras.modo_charla(False)
+    assert await db.kv_get("mode") is None
+    await extras.respuestas_en_audio(True)
+    assert await db.kv_get("voice_replies") is True
+    assert "mes_usd" in json.loads(await extras.ver_costo())

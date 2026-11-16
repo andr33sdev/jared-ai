@@ -238,6 +238,45 @@ async def ver_habitos() -> str:
     return _out({"habitos": await habit_report()})
 
 
+# --- cosas que antes eran comandos -------------------------------------------
+
+async def modo_charla(activo: bool) -> str:
+    await db.kv_set("mode", "charla" if activo else None)
+    return _out({"ok": True, "modo_charla": activo})
+
+
+async def respuestas_en_audio(activo: bool) -> str:
+    await db.kv_set("voice_replies", bool(activo))
+    return _out({"ok": True, "audio": bool(activo)})
+
+
+async def ver_costo() -> str:
+    from . import usage
+    u = await usage.summary()
+    return _out({"hoy_usd": round(u["hoy"], 2), "mes_usd": round(u["mes"], 2),
+                 "proyeccion_mes_usd": round(u["proyeccion"], 2), "busquedas_web_mes": u["busquedas"],
+                 "nota": "estimado propio, no es la factura de Anthropic"})
+
+
+async def ver_esperas() -> str:
+    return _out({"esperando": await open_waits()})
+
+
+async def mostrar_pendientes() -> str:
+    from . import telegram
+    rows = await tools.open_tasks()
+    if not rows:
+        return _out({"ok": True, "tareas": 0, "nota": "No hay tareas abiertas; decíselo vos."})
+    lines = [f"{i}. {r['content']}" for i, r in enumerate(rows, 1)]
+    buttons = [[(f"✅ {i}", f"task:done:{r['id']}") for i, r in list(enumerate(rows, 1))[j:j + 5]]
+               for j in range(0, len(rows), 5)]
+    await telegram.send_message(config.settings.owner_id,
+                                "**Tareas abiertas** (tocá ✅ para cerrar)\n" + "\n".join(lines),
+                                buttons=buttons)
+    return _out({"ok": True, "tareas": len(rows),
+                 "nota": "Ya le mostré la lista con botones. No la repitas: como mucho una línea breve o nada."})
+
+
 # --- registro en las herramientas de Jared ------------------------------------
 
 DEFS = [
@@ -348,7 +387,46 @@ DEFS = [
     },
 ]
 
+DEFS += [
+    {
+        "name": "modo_charla",
+        "description": (
+            "Activa el modo charla cuando Andrés quiere pensar en voz alta, charlar un tema o 'llamarte'. "
+            "Desactivalo cuando diga que terminó, después de hacer el cierre."
+        ),
+        "input_schema": {"type": "object", "properties": {"activo": {"type": "boolean"}}, "required": ["activo"]},
+    },
+    {
+        "name": "respuestas_en_audio",
+        "description": "Activa o desactiva que tus respuestas lleguen también como audio (si lo pide).",
+        "input_schema": {"type": "object", "properties": {"activo": {"type": "boolean"}}, "required": ["activo"]},
+    },
+    {
+        "name": "ver_costo",
+        "description": "Cuánto se lleva gastado en la API de Claude hoy y este mes (estimado).",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "ver_esperas",
+        "description": "Lista lo que Andrés está esperando de otras personas.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "mostrar_pendientes",
+        "description": (
+            "Le muestra a Andrés sus tareas abiertas en un mensaje con botones ✅ para cerrarlas. "
+            "Usala cuando pida ver sus pendientes/tareas."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+]
+
 HANDLERS = {
+    "modo_charla": modo_charla,
+    "respuestas_en_audio": respuestas_en_audio,
+    "ver_costo": ver_costo,
+    "ver_esperas": ver_esperas,
+    "mostrar_pendientes": mostrar_pendientes,
     "guardar_minuta": guardar_minuta,
     "registrar_espera": registrar_espera_tool,
     "cerrar_espera": cerrar_espera,

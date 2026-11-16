@@ -9,15 +9,15 @@ Asistente personal por Telegram con Claude como cerebro. Tiene la personalidad d
 - Google Calendar: consulta y crea eventos, y te avisa 30 minutos antes de cada uno.
 - Busca en internet y todas las mañanas te trae novedades sobre tus intereses.
 - Te escribe sin que le hables: resumen a las 08:00, chequeo a las 16:00 (solo si hay algo útil) y una reflexión nocturna en la que completa la memoria.
-- `/charla` abre un modo para pensar en voz alta con audios y `/fin` lo cierra con conclusiones y próximos pasos.
+- Modo charla para pensar en voz alta con audios: al cerrar te deja conclusiones y próximos pasos.
 - Recordatorios con botones: *✅ Hecho*, *+1 hora* y *Mañana*.
-- Tareas con cierre: le decís "ya lo hice" o tocás ✅ en `/pendientes`.
+- Tareas con cierre: le decís "ya lo hice" o tocás ✅ en la lista de pendientes.
 - Ayuda-memoria 30 minutos antes de cada reunión, con lo que sabe del tema y de la gente.
 - Resumen semanal el domingo a las 21 y repaso de una idea vieja los miércoles a las 19.
 - Presupuesto mensual por rubro, con avisos al 80 % y al 100 %.
 - Gmail en solo lectura: los mails que necesitan acción aparecen en el resumen de la mañana.
-- `/costo` muestra el gasto estimado en Claude del mes.
-- **Minutas:** con `/minuta` le contás una reunión y la ordena. Tus acciones quedan como tareas y lo que deben otros, como esperas.
+- Te dice cuánto lleva gastado en Claude este mes (estimado).
+- **Minutas:** le contás una reunión y la ordena. Tus acciones quedan como tareas y lo que deben otros, como esperas.
 - **Esperas:** "Juan me tiene que mandar X el viernes". Ese día te pregunta si llegó, con botones, y si no llegó te redacta el reclamo.
 - **Documentos:** le mandás un PDF, lo resume, lo guarda y después le podés preguntar sobre él.
 - **Fechas importantes:** cumpleaños, aniversarios y vencimientos. Avisa 7 días antes, el día anterior y el mismo día, con ideas de regalo.
@@ -82,15 +82,14 @@ Usa tu cuenta personal en modo **solo lectura**: Jared nunca manda, borra ni mue
 ---
 
 ## Uso
-- `/ayuda`: lo que sabe hacer.
-- `/charla` y `/fin`: modo para pensar en voz alta.
-- `/resumen`: el resumen del día en el momento.
-- `/recordatorios` y `/memoria`: qué tiene pendiente y qué anotó.
-- `/pendientes`: tareas abiertas, con botones para cerrarlas.
-- `/presupuesto` y `/costo`: topes de gasto del mes y gasto estimado en Claude.
-- `/gmail`: conectar el correo.
-- `/minuta`, `/esperando`, `/fechas` y `/habitos`.
-- `/voz si` o `/voz no`: respuestas en audio. Si le mandás un audio, te contesta también con audio.
+No hay comandos: a Jared le hablás como a una persona. Por ejemplo:
+- "Charlemos un rato" para pensar en voz alta, y "listo, cerremos" para que haga el cierre.
+- "¿Qué tengo pendiente?" te muestra las tareas con botones para cerrarlas.
+- "¿Qué me tienen que mandar?", "¿qué recordatorios tengo?", "¿cómo voy con la plata?"
+- "Respondeme con audios" o "volvé al texto".
+- "Te cuento cómo fue la reunión…" arma la minuta.
+
+Solo quedan dos comandos de sistema: `/resumen` (el resumen del día en el momento) y `/gmail` (para conectar el correo).
 
 Los horarios automáticos se cambian con `BRIEF_TIME`, `CHECKIN_TIME`, `REFLECTION_TIME`, `WEEKLY_TIME`/`WEEKLY_DAY` e `IDEAS_TIME`/`IDEAS_DAY`, más `DATES_TIME` (09:30), `WAITS_TIME` (10:00) y `HABITS_TIME` (21:30) (los días van de 0 = lunes a 6 = domingo). Con `MEETING_PREP=false` se apaga la ayuda-memoria de reuniones.
 
@@ -99,7 +98,7 @@ Los horarios automáticos se cambian con `BRIEF_TIME`, `CHECKIN_TIME`, `REFLECTI
 - Claude: se paga por uso, y las búsquedas web se cobran aparte (alrededor de USD 0,01 cada una). Con uso diario normal (resumen matinal con novedades, chequeo, reflexión y algunas charlas) calculá **aprox. USD 5–15 por mes**. Si querés gastar menos, poné `NEWS_IN_BRIEF=false`.
 
 ## Límites conocidos
-- Los bots de Telegram no pueden hacer llamadas de voz reales. Lo de "llamarlo" se resuelve con `/charla` y audios de ida y vuelta.
+- Los bots de Telegram no pueden hacer llamadas de voz reales. Lo de "llamarlo" se resuelve con el modo charla y audios de ida y vuelta.
 - En Render gratis, si el despertador falla, el primer mensaje puede tardar alrededor de un minuto mientras el servidor arranca.
 
 ## Desarrollo
