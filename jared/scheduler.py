@@ -11,6 +11,12 @@ from .tools import next_occurrence, now_local
 log = logging.getLogger("jared.scheduler")
 _lock = asyncio.Lock()
 
+# Si el servidor estuvo dormido y se despierta tarde, las tareas diarias
+# (resumen, chequeo, reflexión) se saltean en vez de llegar "de la nada".
+JOB_GRACE_MINUTES = 20
+# Un recordatorio que sale más tarde que esto avisa que llegó con demora.
+LATE_REMINDER_MINUTES = 5
+
 BRIEF_PROMPT = """[Tarea automática: resumen de la mañana. {name} no escribió nada; vos iniciás la conversación.]
 Armá un mensaje de buenos días breve y útil:
 1. Agenda de hoy (ver_agenda de hoy 00:00 a 23:59), si el calendario está conectado.
@@ -48,13 +54,18 @@ async def send_due_reminders() -> None:
         "select id, text, due_at, recurrence from reminders where not done and due_at <= now() order by due_at"
     )
     for r in rows:
-        await telegram.send_message(owner, f"⏰ {r['text']}")
+        due_local = r["due_at"].astimezone(config.settings.tz)
+        late = now_local() - due_local > timedelta(minutes=LATE_REMINDER_MINUTES)
+        text = f"⏰ {r['text']}"
+        if late:
+            text = f"⏰ (Perdón, este era para las {due_local:%H:%M} y se me pasó) {r['text']}"
+        await telegram.send_message(owner, text)
         nxt = next_occurrence(r["due_at"], r["recurrence"], now_local())
         if nxt:
             await db.execute("update reminders set due_at = %s where id = %s", nxt, r["id"])
         else:
             await db.execute("update reminders set done = true where id = %s", r["id"])
-        await db.add_message("assistant", f"(Recordatorio enviado) ⏰ {r['text']}")
+        await db.add_message("assistant", f"(Recordatorio enviado) {text}")
 
 
 async def calendar_alerts(minutes_before: int = 30) -> None:
@@ -130,7 +141,7 @@ async def daily_jobs() -> None:
     for key, attr, fn in JOBS:
         h, m = _parse_hhmm(getattr(config.settings, attr))
         scheduled = now.replace(hour=h, minute=m, second=0, microsecond=0)
-        if last_runs.get(key) == today or not (scheduled <= now <= scheduled + timedelta(hours=3)):
+        if last_runs.get(key) == today or not (scheduled <= now <= scheduled + timedelta(minutes=JOB_GRACE_MINUTES)):
             continue
         last_runs[key] = today
         await db.kv_set("last_runs", last_runs)

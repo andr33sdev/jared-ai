@@ -165,3 +165,25 @@ async def test_daily_jobs_run_once(database, monkeypatch):
     await scheduler.daily_jobs()
     await scheduler.daily_jobs()
     assert calls == [1]
+
+
+async def test_late_reminder_is_flagged(database, sent):
+    late = tools.now_local() - timedelta(hours=1)
+    await db.execute("insert into reminders (text, due_at) values ('Llamar a Juan', %s)", late)
+    await scheduler.send_due_reminders()
+    assert "se me pasó" in sent[0][1] and f"{late:%H:%M}" in sent[0][1]
+
+
+async def test_missed_daily_job_is_skipped(database, monkeypatch):
+    calls = []
+
+    async def fake_job():
+        calls.append(1)
+
+    past = tools.now_local() - timedelta(hours=1)
+    if past.date() != tools.now_local().date():
+        pytest.skip("cerca de medianoche")
+    monkeypatch.setattr(config.settings, "brief_time", f"{past.hour:02d}:{past.minute:02d}")
+    monkeypatch.setattr(scheduler, "JOBS", [("brief", "brief_time", fake_job)])
+    await scheduler.daily_jobs()
+    assert calls == []
