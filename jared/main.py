@@ -135,7 +135,8 @@ async def handle_update(update: dict) -> None:
         async with telegram.typing(chat_id, "typing"):
             try:
                 audio = await telegram.download_file(media["file_id"])
-                transcript = await voice.transcribe(audio)
+                mime = media.get("mime_type") or "audio/ogg"
+                transcript = await voice.transcribe(audio, "audio." + ("mp3" if "mpeg" in mime else "ogg"), mime)
             except Exception as exc:
                 await telegram.send_message(chat_id, f"No pude escuchar el audio ({exc}).")
                 return
@@ -193,7 +194,7 @@ async def handle_update(update: dict) -> None:
         reply = "Listo."
     await telegram.send_message(chat_id, reply)
 
-    if voice_in or await db.kv_get("voice_replies", False):
+    if await db.kv_get("voice_replies", False):
         audio = await voice.synthesize(reply)
         if audio:
             with contextlib.suppress(Exception):

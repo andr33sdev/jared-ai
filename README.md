@@ -58,7 +58,8 @@ El plan gratis de Render apaga el servidor después de 15 minutos sin tráfico, 
 
 Con un solo servicio prendido todo el mes se usan unas 744 de las 750 horas gratis. No crees otro servicio gratis en la misma cuenta de Render, porque se pasarían del límite.
 
-### 6. Audios (opcional, recomendado)
+### 6. Audios (recomendado)
+Si ya cargaste `ELEVENLABS_API_KEY` (paso 9), los audios funcionan sin hacer nada más: se transcriben con ElevenLabs Scribe, que cuesta alrededor de USD 0,20 por hora de audio. Groq es la alternativa gratis:
 1. Entrá a https://console.groq.com → **API Keys** → `GROQ_API_KEY`. Es gratis.
 2. Groq solo **transcribe** tus audios con Whisper; el que piensa y responde es siempre Claude.
 3. La voz de Jared (`es-AR-TomasNeural`) sale de Edge TTS, no necesita clave. Si algún día falla, Jared responde solo en texto.

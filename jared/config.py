@@ -48,6 +48,7 @@ class Settings:
     elevenlabs_model: str
     elevenlabs_monthly_chars: int
     call_pause_ms: int
+    elevenlabs_stt_model: str
 
     @property
     def tz(self) -> ZoneInfo:
@@ -101,6 +102,7 @@ def load() -> Settings:
         elevenlabs_monthly_chars=int(_env("ELEVENLABS_MONTHLY_CHARS", "100000")),
         # silencio que espera la llamada antes de considerar que terminaste de hablar
         call_pause_ms=int(_env("CALL_PAUSE_MS", "900")),
+        elevenlabs_stt_model=_env("ELEVENLABS_STT_MODEL", "scribe_v2"),
     )
 
 

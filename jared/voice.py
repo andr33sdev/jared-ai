@@ -12,18 +12,29 @@ log = logging.getLogger("jared.voice")
 
 
 async def transcribe(audio: bytes, filename: str = "audio.ogg", mime: str = "audio/ogg") -> str:
-    key = config.settings.groq_api_key
-    if not key:
-        raise RuntimeError("Falta GROQ_API_KEY para entender audios")
-    async with httpx.AsyncClient(timeout=120) as c:
-        r = await c.post(
-            "https://api.groq.com/openai/v1/audio/transcriptions",
-            headers={"Authorization": f"Bearer {key}"},
-            data={"model": "whisper-large-v3-turbo", "language": "es", "response_format": "json"},
-            files={"file": (filename, audio, mime)},
-        )
-        r.raise_for_status()
-        return r.json().get("text", "").strip()
+    """Pasa un audio a texto. Usa Groq (gratis) si hay clave; si no, ElevenLabs Scribe (~USD 0,20/hora)."""
+    s = config.settings
+    if s.groq_api_key:
+        async with httpx.AsyncClient(timeout=120) as c:
+            r = await c.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {s.groq_api_key}"},
+                data={"model": "whisper-large-v3-turbo", "language": "es", "response_format": "json"},
+                files={"file": (filename, audio, mime)},
+            )
+            r.raise_for_status()
+            return r.json().get("text", "").strip()
+    if s.elevenlabs_api_key:
+        async with httpx.AsyncClient(timeout=120) as c:
+            r = await c.post(
+                "https://api.elevenlabs.io/v1/speech-to-text",
+                headers={"xi-api-key": s.elevenlabs_api_key},
+                data={"model_id": s.elevenlabs_stt_model, "tag_audio_events": "false"},
+                files={"file": (filename, audio, mime)},
+            )
+            r.raise_for_status()
+            return (r.json().get("text") or "").strip()
+    raise RuntimeError("Para entender audios necesito ELEVENLABS_API_KEY o GROQ_API_KEY en Render")
 
 
 async def synthesize(text: str) -> bytes | None:

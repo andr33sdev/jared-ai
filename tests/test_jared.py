@@ -560,3 +560,46 @@ async def test_sentence_splitter():
         out += s.feed(ch)
     assert out == ["Hola, Andrés.", "Te escucho. Sí, claro, mañana a las 9 te lo recuerdo."]
     assert s.flush() == ["¿Algo más?"]
+
+
+async def test_voice_note_replies_in_text(database, monkeypatch, sent):
+    from jared import telegram, voice
+
+    async def fake_download(file_id):
+        return b"OGG"
+
+    async def fake_transcribe(audio, filename="a.ogg", mime="audio/ogg"):
+        return "Recordame mañana llamar al proveedor"
+
+    voices = []
+
+    async def fake_send_voice(chat_id, audio, filename="x"):
+        voices.append(audio)
+
+    monkeypatch.setattr(telegram, "download_file", fake_download)
+    monkeypatch.setattr(voice, "transcribe", fake_transcribe)
+    monkeypatch.setattr(telegram, "send_voice", fake_send_voice)
+    fake = FakeClaude([_msg([TextBlock(type="text", text="Listo: mañana 09:00 — Llamar al proveedor.")], "end_turn")])
+    monkeypatch.setattr(agent, "client", lambda: fake)
+    await handle_update({"update_id": 501, "message": {"chat": {"id": 42, "type": "private"}, "from": {"id": 42},
+                                                        "voice": {"file_id": "V1", "mime_type": "audio/ogg"}}})
+    assert fake.calls[0]["messages"][-1]["content"][-1]["text"] == "Recordame mañana llamar al proveedor"
+    assert sent[-1][1].startswith("Listo") and voices == []
+
+
+async def test_transcribe_uses_elevenlabs_without_groq(monkeypatch):
+    import httpx
+    from jared import voice
+    monkeypatch.setattr(config.settings, "groq_api_key", None)
+    monkeypatch.setattr(config.settings, "elevenlabs_api_key", "k")
+    seen = {}
+
+    def handler(request: httpx.Request):
+        seen["url"] = str(request.url)
+        seen["key"] = request.headers.get("xi-api-key")
+        return httpx.Response(200, json={"text": " hola Jared "})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler)))
+    assert await voice.transcribe(b"OGG") == "hola Jared"
+    assert seen["url"].endswith("/v1/speech-to-text") and seen["key"] == "k"
