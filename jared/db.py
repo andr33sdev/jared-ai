@@ -51,6 +51,23 @@ create table if not exists processed_updates (
 );
 alter table memories add column if not exists status text;
 alter table memories add column if not exists reviewed_at timestamptz;
+create table if not exists documents (
+    id bigserial primary key,
+    filename text not null,
+    file_id text,
+    title text,
+    summary text,
+    text text not null default '',
+    created_at timestamptz not null default now()
+);
+create index if not exists documents_fts
+    on documents using gin (to_tsvector('spanish', coalesce(title,'') || ' ' || coalesce(summary,'') || ' ' || text));
+create table if not exists habit_log (
+    day date not null,
+    habit text not null,
+    done boolean not null,
+    primary key (day, habit)
+);
 create table if not exists usage (
     day date not null,
     model text not null,

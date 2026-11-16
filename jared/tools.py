@@ -14,7 +14,7 @@ log = logging.getLogger("jared.tools")
 
 CATEGORIES = [
     "idea", "pensamiento", "gasto", "ingreso", "tarea", "interes", "persona",
-    "preferencia", "objetivo", "proyecto", "dato",
+    "preferencia", "objetivo", "proyecto", "dato", "minuta", "espera", "fecha",
 ]
 RECURRENCES = ["none", "daily", "weekdays", "weekly", "monthly"]
 

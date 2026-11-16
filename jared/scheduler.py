@@ -6,7 +6,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 
-from . import agent, config, db, gcal, telegram
+from . import agent, config, db, extras, gcal, telegram
 from .tools import next_occurrence, now_local
 
 log = logging.getLogger("jared.scheduler")
@@ -200,6 +200,44 @@ async def idea_review() -> None:
     )
 
 
+DATES_PROMPT = """[Tarea automática: fechas importantes. {name} no escribió nada.]
+Estas fechas se acercan:
+{items}
+Avisale en un mensaje breve. Para cumpleaños y aniversarios que faltan 7 días, sugerí 3 ideas de regalo concretas según lo que sabés de esa persona (buscá en la memoria; si no sabés nada, ideas generales buenas). Para vencimientos, recordale qué tiene que hacer. Una línea por fecha salvo las ideas de regalo."""
+
+
+async def important_dates() -> None:
+    items = [d for d in await extras.upcoming_dates(7) if d["faltan"] in (7, 1, 0)]
+    if not items:
+        return
+    when = {0: "HOY", 1: "mañana", 7: "en una semana"}
+    lines = "\n".join(f"- {d['content']} ({d['tipo']}): {when[d['faltan']]}, {d['proxima']:%d/%m}" for d in items)
+    text = await agent.run(DATES_PROMPT.format(name=config.settings.owner_name, items=lines), save=False)
+    if text:
+        await db.add_message("user", "(mensaje automático: fechas importantes)")
+        await db.add_message("assistant", text)
+        await telegram.send_message(config.settings.owner_id, text)
+
+
+async def waiting_followups() -> None:
+    for w in await extras.due_waits():
+        await db.execute("update memories set reviewed_at = now() where id = %s", w["id"])
+        await telegram.send_message(
+            config.settings.owner_id,
+            f"⏳ **¿Llegó?** {w['content']}",
+            buttons=[[("✅ Llegó", f"esp:ok:{w['id']}"), ("❌ Todavía no", f"esp:no:{w['id']}")]],
+        )
+
+
+async def habits_check() -> None:
+    habits = await extras.get_habits()
+    if not habits:
+        return
+    day = now_local().strftime("%Y%m%d")
+    rows = [[(f"✅ {h}", f"hab:{i}:1:{day}"), ("❌", f"hab:{i}:0:{day}")] for i, h in enumerate(habits)]
+    await telegram.send_message(config.settings.owner_id, "🌙 ¿Cómo te fue hoy con tus hábitos?", buttons=rows)
+
+
 # (clave, horario, función, día de la semana o None = todos los días)
 JOBS = [
     ("brief", "brief_time", morning_brief, None),
@@ -207,6 +245,9 @@ JOBS = [
     ("reflection", "reflection_time", reflection, None),
     ("weekly", "weekly_time", weekly_summary, "weekly_day"),
     ("ideas", "ideas_time", idea_review, "ideas_day"),
+    ("dates", "dates_time", important_dates, None),
+    ("waits", "waits_time", waiting_followups, None),
+    ("habits", "habits_time", habits_check, None),
 ]
 
 

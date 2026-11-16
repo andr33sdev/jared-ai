@@ -8,7 +8,7 @@ from typing import Any
 
 from anthropic import AsyncAnthropic
 
-from . import config, db, persona, usage
+from . import config, db, extras, persona, usage
 from .tools import TOOL_DEFS, now_local, run_tool, when_label
 
 log = logging.getLogger("jared.agent")
@@ -74,6 +74,20 @@ async def context_block(mode: str | None) -> str:
     )
     if tasks:
         parts.append("## Tareas abiertas\n" + "\n".join(f"- [{r['id']}] {r['content']}" for r in tasks))
+
+    waits = await extras.open_waits()
+    if waits:
+        parts.append("## Esperando de otros\n" + "\n".join(
+            f"- [{r['id']}] {r['content']} (para el {r['happened_on']:%d/%m})" for r in waits[:15]))
+
+    dates = await extras.upcoming_dates(21)
+    if dates:
+        parts.append("## Fechas importantes (próximas 3 semanas)\n" + "\n".join(
+            f"- {d['content']}: {d['proxima']:%d/%m} (faltan {d['faltan']} días)" for d in dates))
+
+    habits = await extras.get_habits()
+    if habits:
+        parts.append("## Hábitos que sigue\n" + ", ".join(habits))
 
     rems = await db.fetch(
         "select id, text, due_at, recurrence from reminders where not done "

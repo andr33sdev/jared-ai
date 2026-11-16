@@ -17,7 +17,7 @@ config.reload()
 @pytest_asyncio.fixture
 async def database():
     await db.init(os.environ["TEST_DATABASE_URL"])
-    await db.execute("truncate messages, memories, reminders, kv, processed_updates, usage restart identity")
+    await db.execute("truncate messages, memories, reminders, kv, processed_updates, usage, documents, habit_log restart identity")
     yield db
     await db.close()
 

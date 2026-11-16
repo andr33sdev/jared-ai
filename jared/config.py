@@ -39,6 +39,9 @@ class Settings:
     ideas_time: str
     ideas_day: int
     meeting_prep: bool
+    dates_time: str
+    waits_time: str
+    habits_time: str
 
     @property
     def tz(self) -> ZoneInfo:
@@ -81,6 +84,9 @@ def load() -> Settings:
         ideas_time=_env("IDEAS_TIME", "19:00"),
         ideas_day=int(_env("IDEAS_DAY", "2")),  # miércoles
         meeting_prep=(_env("MEETING_PREP", "true").lower() == "true"),
+        dates_time=_env("DATES_TIME", "09:30"),
+        waits_time=_env("WAITS_TIME", "10:00"),
+        habits_time=_env("HABITS_TIME", "21:30"),
     )
 
 

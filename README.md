@@ -17,6 +17,11 @@ Asistente personal por Telegram con Claude como cerebro. Tiene la personalidad d
 - Presupuesto mensual por rubro, con avisos al 80 % y al 100 %.
 - Gmail en solo lectura: los mails que necesitan acción aparecen en el resumen de la mañana.
 - `/costo` muestra el gasto estimado en Claude del mes.
+- **Minutas:** con `/minuta` le contás una reunión y la ordena. Tus acciones quedan como tareas y lo que deben otros, como esperas.
+- **Esperas:** "Juan me tiene que mandar X el viernes". Ese día te pregunta si llegó, con botones, y si no llegó te redacta el reclamo.
+- **Documentos:** le mandás un PDF, lo resume, lo guarda y después le podés preguntar sobre él.
+- **Fechas importantes:** cumpleaños, aniversarios y vencimientos. Avisa 7 días antes, el día anterior y el mismo día, con ideas de regalo.
+- **Hábitos:** a las 21:30 te pregunta con botones y lleva tus rachas.
 
 **Arquitectura:** Python con FastAPI. Telegram le avisa cada mensaje nuevo por webhook, Claude (Sonnet 5.5) hace de cerebro con herramientas y búsqueda web, y la base es Postgres en Supabase. Corre en Render (plan gratis) y tiene un reloj interno que revisa cada minuto si hay recordatorios o tareas pendientes.
 
@@ -84,9 +89,10 @@ Usa tu cuenta personal en modo **solo lectura**: Jared nunca manda, borra ni mue
 - `/pendientes`: tareas abiertas, con botones para cerrarlas.
 - `/presupuesto` y `/costo`: topes de gasto del mes y gasto estimado en Claude.
 - `/gmail`: conectar el correo.
+- `/minuta`, `/esperando`, `/fechas` y `/habitos`.
 - `/voz si` o `/voz no`: respuestas en audio. Si le mandás un audio, te contesta también con audio.
 
-Los horarios automáticos se cambian con `BRIEF_TIME`, `CHECKIN_TIME`, `REFLECTION_TIME`, `WEEKLY_TIME`/`WEEKLY_DAY` e `IDEAS_TIME`/`IDEAS_DAY` (los días van de 0 = lunes a 6 = domingo). Con `MEETING_PREP=false` se apaga la ayuda-memoria de reuniones.
+Los horarios automáticos se cambian con `BRIEF_TIME`, `CHECKIN_TIME`, `REFLECTION_TIME`, `WEEKLY_TIME`/`WEEKLY_DAY` e `IDEAS_TIME`/`IDEAS_DAY`, más `DATES_TIME` (09:30), `WAITS_TIME` (10:00) y `HABITS_TIME` (21:30) (los días van de 0 = lunes a 6 = domingo). Con `MEETING_PREP=false` se apaga la ayuda-memoria de reuniones.
 
 ## Costos
 - Render, Supabase, cron-job.org, Groq y Telegram: gratis.

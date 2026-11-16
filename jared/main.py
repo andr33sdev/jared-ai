@@ -9,9 +9,9 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
-from datetime import timedelta
+from datetime import date, timedelta
 
-from . import agent, config, db, gmail, scheduler, telegram, tools, usage, voice
+from . import agent, config, db, extras, gmail, scheduler, telegram, tools, usage, voice
 from .tools import now_local, when_label
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -30,6 +30,10 @@ HELP = """Soy Jared. Algunas cosas que puedo hacer por vos:
 • /charla para pensar en voz alta conmigo, /fin para cerrar y guardar conclusiones.
 • /voz si → te respondo con audios. /costo → cuánto voy gastando en Claude.
 • /gmail → conecto tu correo (solo lectura).
+• /minuta y me contás una reunión → armo la minuta, tus tareas y lo que deben otros. /esperando
+• Mandame un PDF → lo resumo, lo guardo y después te respondo preguntas sobre él.
+• Cumpleaños y vencimientos → te aviso antes. /fechas
+• Hábitos → cada noche te pregunto con botones y llevo tus rachas. /habitos
 
 Lo que hago solo: resumen a la mañana, chequeo a la tarde, ayuda-memoria antes de cada reunión, resumen semanal el domingo y, los miércoles, te rescato una idea que quedó en el aire."""
 
@@ -169,14 +173,48 @@ async def handle_update(update: dict) -> None:
                                          "data": base64.b64encode(data).decode()}},
             {"type": "text", "text": caption},
         ]
+    elif msg.get("document"):
+        doc = msg["document"]
+        name = doc.get("file_name") or "documento"
+        mime = doc.get("mime_type") or ""
+        if (doc.get("file_size") or 0) > 20 * 1024 * 1024:
+            await telegram.send_message(chat_id, "Ese archivo pesa más de 20 MB y Telegram no me deja bajarlo. 😔")
+            return
+        is_pdf = mime == "application/pdf" or name.lower().endswith(".pdf")
+        is_text = mime.startswith("text/") or name.lower().endswith((".txt", ".csv", ".md"))
+        if not (is_pdf or is_text):
+            await telegram.send_message(chat_id, "Por ahora entiendo PDFs y archivos de texto. Si podés, exportalo a PDF.")
+            return
+        async with telegram.typing(chat_id):
+            data = await telegram.download_file(doc["file_id"])
+            doc_text = extras.extract_pdf_text(data) if is_pdf else data.decode("utf-8", errors="replace")
+            doc_id = await extras.store_document(name, doc["file_id"], doc_text)
+        caption = msg.get("caption") or ""
+        intro = (f"Te mando el documento '{name}' (quedó guardado como documento #{doc_id}). "
+                 f"{caption}").strip()
+        if is_pdf and len(data) < 15 * 1024 * 1024:
+            content = [
+                {"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
+                                                "data": base64.b64encode(data).decode()}},
+                {"type": "text", "text": intro},
+            ]
+        else:
+            content = intro + "\n\nTexto del documento:\n" + doc_text[:60000]
+        text = f"[documento #{doc_id}: {name}] {caption}".strip()
     elif text:
         content = text
     else:
         await telegram.send_message(chat_id, "Por ahora entiendo texto, audios y fotos.")
         return
 
+    extra = ""
+    if await db.kv_get("minuta_next", False):
+        await db.kv_set("minuta_next", False)
+        extra = ("IMPORTANTE: este mensaje es el relato de una reunión. Armá la minuta con guardar_minuta "
+                 "y mostrásela prolija y corta.")
     async with telegram.typing(chat_id):
-        reply = await agent.run(content)
+        reply = await agent.run(content, extra_system=extra,
+                                record_as=text if msg.get("document") else None)
     if not reply:
         reply = "Listo."
     await telegram.send_message(chat_id, reply)
@@ -247,6 +285,35 @@ async def handle_command(chat_id: int, text: str) -> bool:
         else:
             lines = [f"• _{r['category']}_: {r['content']}" for r in rows]
             await telegram.send_message(chat_id, "**Lo último que anoté**\n" + "\n".join(lines))
+        return True
+    if cmd == "/minuta":
+        await db.kv_set("minuta_next", True)
+        await telegram.send_message(chat_id, "Te escucho. Contame (mejor en audio) cómo fue la reunión: quiénes estaban, qué se decidió y quién hace qué. 📝")
+        return True
+    if cmd == "/esperando":
+        rows = await extras.open_waits()
+        if not rows:
+            await telegram.send_message(chat_id, "No estás esperando nada de nadie. ✨")
+        else:
+            lines = [f"• {r['content']} — {r['happened_on']:%d/%m}" for r in rows]
+            await telegram.send_message(chat_id, "**Esperando de otros**\n" + "\n".join(lines))
+        return True
+    if cmd == "/fechas":
+        rows = await extras.upcoming_dates(60)
+        if not rows:
+            await telegram.send_message(chat_id, "No hay fechas importantes en los próximos 60 días. Pasame cumpleaños y vencimientos y los cuido yo.")
+        else:
+            lines = [f"• {r['proxima']:%d/%m} — {r['content']}" + (" (¡hoy!)" if r["faltan"] == 0 else f" (en {r['faltan']} días)")
+                     for r in rows]
+            await telegram.send_message(chat_id, "**Próximas fechas**\n" + "\n".join(lines))
+        return True
+    if cmd == "/habitos":
+        rows = await extras.habit_report()
+        if not rows:
+            await telegram.send_message(chat_id, "Todavía no definimos hábitos. Decime cuáles querés seguir (ej: agua, caminar, leer).")
+        else:
+            lines = [f"• {r['habito']}: {r['semana']}  🔥 {r['racha']}" for r in rows]
+            await telegram.send_message(chat_id, "**Hábitos (últimos 7 días)**\n" + "\n".join(lines))
         return True
     if cmd == "/pendientes":
         await send_open_tasks(chat_id)
@@ -351,6 +418,50 @@ async def handle_callback(cb: dict) -> None:
                     record_as="(eligió avanzar con una idea)",
                 )
             await telegram.send_message(chat_id, reply)
+        return
+
+    if kind == "esp":
+        row = await db.fetchrow("select content from memories where id = %s", ref)
+        if action == "ok":
+            await extras.cerrar_espera(ref)
+            status = "✅ Llegó"
+            await telegram.answer_callback(cb["id"], status)
+            await telegram.edit_text(chat_id, message_id, f"{original}\n\n{status}")
+            return
+        nxt = now_local().date() + timedelta(days=2)
+        await db.execute("update memories set happened_on = %s where id = %s", nxt, ref)
+        status = f"❌ Todavía no. Te vuelvo a preguntar el {nxt:%d/%m}."
+        await telegram.answer_callback(cb["id"], "Anotado")
+        await telegram.edit_text(chat_id, message_id, f"{original}\n\n{status}")
+        async with telegram.typing(chat_id):
+            reply = await agent.run(
+                f"(Andrés dice que todavía no llegó: {row['content'] if row else ''}. Redactale un mensaje corto "
+                "y cordial para reclamarlo, listo para copiar y mandar por WhatsApp. Solo el mensaje y una línea de intro.)",
+                record_as="(todavía no llegó algo que esperaba)",
+            )
+        await telegram.send_message(chat_id, reply)
+        return
+
+    if kind == "hab":
+        habits = await extras.get_habits()
+        idx = int(parts[1]) if parts[1].isdigit() else -1
+        if not (0 <= idx < len(habits)) or len(parts) < 4:
+            await telegram.answer_callback(cb["id"])
+            return
+        habit, done = habits[idx], parts[2] == "1"
+        day = date(int(parts[3][:4]), int(parts[3][4:6]), int(parts[3][6:8]))
+        await extras.log_habit(habit, day, done)
+        n = await extras.streak(habit, day)
+        await telegram.answer_callback(cb["id"], f"🔥 Racha de {n} días" if done else "Mañana será otro día")
+        markup = (msg.get("reply_markup") or {}).get("inline_keyboard", [])
+        rows = []
+        for row in markup:
+            datas = [b.get("callback_data", "") for b in row]
+            if any(d.startswith(f"hab:{idx}:") for d in datas):
+                rows.append([(f"{'✅' if done else '❌'} {habit}" + (f" · 🔥 {n}" if done else ""), "noop")])
+            else:
+                rows.append([(b["text"], b["callback_data"]) for b in row])
+        await telegram.edit_buttons(chat_id, message_id, rows)
         return
 
     await telegram.answer_callback(cb["id"])

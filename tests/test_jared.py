@@ -1,4 +1,6 @@
 import copy
+import io
+from datetime import date
 import json
 from datetime import datetime, timedelta
 
@@ -318,3 +320,106 @@ async def test_meeting_prep(database, monkeypatch, sent):
 async def test_gmail_not_connected(database):
     out = json.loads(await tools.buscar_mails())
     assert "no está conectado" in out["error"]
+
+
+# --- minutas, esperas, documentos, fechas, hábitos ------------------------
+
+from jared import extras  # noqa: E402
+
+
+async def test_minuta_creates_tasks_and_waits(database):
+    out = json.loads(await extras.guardar_minuta(
+        titulo="Reunión ISO", resumen="Se revisó el plan de auditoría.",
+        decisiones=["Auditoría interna el 1/12"],
+        participantes=["Marta", "Juan"],
+        acciones=[
+            {"tarea": "Actualizar el manual de calidad", "es_mio": True,
+             "fecha": (tools.now_local() + timedelta(days=2)).isoformat()},
+            {"tarea": "Mandar el procedimiento de compras", "responsable": "Juan", "es_mio": False,
+             "fecha": (tools.now_local() + timedelta(days=1)).date().isoformat()},
+        ]))
+    assert out["tareas"] and out["esperas"] and out["recordatorios"]
+    assert len(await tools.open_tasks()) == 1
+    waits = await extras.open_waits()
+    assert "Juan tiene que: Mandar el procedimiento" in waits[0]["content"]
+
+
+async def test_wait_followup_buttons(database, tg_calls, monkeypatch):
+    await extras.registrar_espera("mandar el presupuesto", "Juan", tools.now_local().date().isoformat())
+    await scheduler.waiting_followups()
+    send = [p for m, p in tg_calls if m == "sendMessage"][-1]
+    assert "¿Llegó?" in send["text"]
+    await scheduler.waiting_followups()  # no repite el mismo día
+    assert len([m for m, _ in tg_calls if m == "sendMessage"]) == 1
+    fake = FakeClaude([_msg([TextBlock(type="text", text="Hola Juan, ¿cómo va el presupuesto?")], "end_turn")])
+    monkeypatch.setattr(agent, "client", lambda: fake)
+    await handle_update(_cb("esp:no:1", text=send["text"]))
+    row = await db.fetchrow("select happened_on, status from memories where id = 1")
+    assert row["happened_on"] == tools.now_local().date() + timedelta(days=2) and row["status"] is None
+    await handle_update(_cb("esp:ok:1", text=send["text"]))
+    assert await extras.open_waits() == []
+
+
+async def test_pdf_document_flow(database, tg_calls, monkeypatch):
+    from pypdf import PdfWriter
+    from jared import telegram
+    buf = io.BytesIO()
+    w = PdfWriter()
+    w.add_blank_page(width=200, height=200)
+    w.write(buf)
+    pdf = buf.getvalue()
+
+    async def fake_download(file_id):
+        return pdf
+
+    monkeypatch.setattr(telegram, "download_file", fake_download)
+    fake = FakeClaude([
+        _msg([ToolUseBlock(id="t1", type="tool_use", name="describir_documento",
+                           input={"id": 1, "titulo": "Póliza del auto", "resumen": "Vence el 10/03/2027"})], "tool_use"),
+        _msg([TextBlock(type="text", text="Es la póliza del auto, vence el 10/03.")], "end_turn"),
+    ])
+    monkeypatch.setattr(agent, "client", lambda: fake)
+    await handle_update({"update_id": 77, "message": {
+        "chat": {"id": 42, "type": "private"}, "from": {"id": 42},
+        "document": {"file_id": "F1", "file_name": "poliza.pdf", "mime_type": "application/pdf", "file_size": len(pdf)}}})
+    first_call = fake.calls[0]["messages"][-1]["content"]
+    assert first_call[0]["type"] == "document" and "documento #1" in first_call[1]["text"]
+    found = json.loads(await extras.buscar_documentos("póliza"))
+    assert found["documentos"][0]["title"] == "Póliza del auto"
+    hist = await db.recent_messages()
+    assert hist[0]["content"].startswith("[documento #1: poliza.pdf]")
+
+
+async def test_important_dates(database, monkeypatch, sent):
+    today = tools.now_local().date()
+    await extras.guardar_fecha("Cumpleaños de Juan", (today + timedelta(days=7)).replace(year=1990).isoformat(), True, "cumpleaños")
+    await extras.guardar_fecha("Vence el seguro", (today + timedelta(days=1)).isoformat(), False, "vencimiento")
+    await extras.guardar_fecha("Algo lejano", (today + timedelta(days=20)).isoformat(), False, "otro")
+    up = await extras.upcoming_dates(30)
+    assert [d["faltan"] for d in up] == [1, 7, 20]
+    fake = FakeClaude([_msg([TextBlock(type="text", text="Mañana vence el seguro. En una semana cumple Juan.")], "end_turn")])
+    monkeypatch.setattr(agent, "client", lambda: fake)
+    await scheduler.important_dates()
+    prompt = fake.calls[0]["messages"][-1]["content"]
+    assert "Cumpleaños de Juan" in prompt and "Algo lejano" not in prompt
+    assert sent and "seguro" in sent[0][1]
+
+
+async def test_feb29_birthday():
+    assert extras.next_date(date(2000, 2, 29), True, date(2027, 1, 1)) == date(2027, 2, 28)
+    assert extras.next_date(date(2026, 1, 1), False, date(2027, 1, 1)) is None
+
+
+async def test_habits(database, tg_calls):
+    await extras.definir_habitos(["Agua", "Caminar"])
+    await scheduler.habits_check()
+    send = [p for m, p in tg_calls if m == "sendMessage"][-1]
+    kb = send["reply_markup"]
+    yesterday = (tools.now_local().date() - timedelta(days=1))
+    await extras.log_habit("Agua", yesterday, True)
+    await handle_update(_cb(kb["inline_keyboard"][0][0]["callback_data"], markup=kb))
+    edit = [p for m, p in tg_calls if m == "editMessageReplyMarkup"][-1]
+    assert edit["reply_markup"]["inline_keyboard"][0][0]["text"] == "✅ Agua · 🔥 2"
+    assert edit["reply_markup"]["inline_keyboard"][1][0]["text"] == "✅ Caminar"
+    report = await extras.habit_report()
+    assert report[0]["racha"] == 2 and report[0]["semana"].endswith("✅✅")
