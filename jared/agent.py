@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from anthropic import AsyncAnthropic
 
@@ -40,8 +40,10 @@ def tools() -> list[dict]:
     return [*TOOL_DEFS, web]
 
 
-async def context_block(mode: str | None) -> str:
-    """Parte dinámica del prompt: fecha, perfil, memorias clave y pendientes."""
+async def context_block(mode: str | None, light: bool = False) -> str:
+    """Parte dinámica del prompt: fecha, perfil, memorias clave y pendientes.
+
+    light=True (llamada de voz): menos memoria para responder más rápido."""
     now = now_local()
     parts = [f"## Ahora\n{DIAS[now.weekday()]} {now:%d/%m/%Y %H:%M} ({config.settings.tz_name})"]
 
@@ -50,7 +52,8 @@ async def context_block(mode: str | None) -> str:
 
     key_rows = await db.fetch(
         "select id, category, content from memories where active and category in "
-        "('preferencia','interes','objetivo','proyecto','persona') order by updated_at desc limit 40"
+        "('preferencia','interes','objetivo','proyecto','persona') order by updated_at desc limit %s",
+        12 if light else 40,
     )
     if key_rows:
         parts.append("## Memorias clave\n" + "\n".join(
@@ -59,7 +62,8 @@ async def context_block(mode: str | None) -> str:
     recent = await db.fetch(
         "select id, category, content, amount, currency from memories where active "
         "and category not in ('preferencia','interes','objetivo','proyecto','persona','tarea') "
-        "order by created_at desc limit 15"
+        "order by created_at desc limit %s",
+        5 if light else 15,
     )
     if recent:
         lines = []
@@ -74,6 +78,9 @@ async def context_block(mode: str | None) -> str:
     )
     if tasks:
         parts.append("## Tareas abiertas\n" + "\n".join(f"- [{r['id']}] {r['content']}" for r in tasks))
+
+    if light:
+        return "\n\n".join(parts) + await _light_tail()
 
     waits = await extras.open_waits()
     if waits:
@@ -107,6 +114,24 @@ async def context_block(mode: str | None) -> str:
     return "\n\n".join(parts)
 
 
+async def _light_tail() -> str:
+    rems = await db.fetch(
+        "select id, text, due_at from reminders where not done and due_at <= now() + interval '2 days' "
+        "order by due_at limit 6")
+    if not rems:
+        return ""
+    return "\n\n## Recordatorios próximos\n" + "\n".join(
+        f"- [{r['id']}] {when_label(r['due_at'])} — {r['text']}" for r in rems)
+
+
+# Herramientas disponibles en la llamada de voz (las más usadas en una charla)
+LIGHT_TOOLS = {
+    "guardar_memoria", "buscar_memoria", "completar_tarea", "crear_recordatorio",
+    "listar_recordatorios", "cancelar_recordatorio", "ver_agenda", "crear_evento",
+    "registrar_espera", "guardar_fecha", "resumen_gastos", "web_search",
+}
+
+
 def _history_to_messages(rows: list[dict]) -> list[dict]:
     msgs: list[dict] = []
     for r in rows:
@@ -134,6 +159,8 @@ async def run(
     extra_system: str = "",
     max_steps: int = 15,
     smart: bool | None = None,
+    light: bool = False,
+    on_text: Callable[[str], Awaitable[None]] | None = None,
 ) -> str:
     """Corre un turno completo de Jared y devuelve el texto final.
 
@@ -147,22 +174,31 @@ async def run(
         model = config.settings.model_smart if smart else config.settings.model
         system = [
             {"type": "text", "text": persona.persona(), "cache_control": {"type": "ephemeral"}},
-            {"type": "text", "text": await context_block(mode) + ("\n\n" + extra_system if extra_system else "")},
+            {"type": "text", "text": await context_block(mode, light) + ("\n\n" + extra_system if extra_system else "")},
         ]
-        messages = _history_to_messages(await db.recent_messages(16)) if use_history else []
+        tool_list = [t for t in tools() if t["name"] in LIGHT_TOOLS] if light else tools()
+        messages = _history_to_messages(await db.recent_messages(10 if light else 16)) if use_history else []
         if messages and messages[-1]["role"] == "user":
             messages.append({"role": "assistant", "content": "(sigo atento)"})
         messages.append({"role": "user", "content": user_content})
 
         final_text = ""
         for _ in range(max_steps):
-            resp = await client().messages.create(
+            params = dict(
                 model=model,
-                max_tokens=4000,
+                max_tokens=800 if light else 4000,
                 system=system,
-                tools=tools(),
+                tools=tool_list,
                 messages=_with_cache_breakpoint(messages),
             )
+            if on_text is None:
+                resp = await client().messages.create(**params)
+            else:
+                async with client().messages.stream(**params) as stream:
+                    async for event in stream:
+                        if event.type == "text" and event.text:
+                            await on_text(event.text)
+                    resp = await stream.get_final_message()
             try:
                 await usage.record(model, resp.usage)
             except Exception:

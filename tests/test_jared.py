@@ -105,6 +105,36 @@ class FakeClaude:
         self.calls.append(copy.deepcopy(kwargs))
         return self.script.pop(0)
 
+    def stream(self, **kwargs):
+        self.calls.append(copy.deepcopy(kwargs))
+        msg = self.script.pop(0)
+        return FakeStream(msg)
+
+
+class FakeStream:
+    """Imita client.messages.stream: emite el texto de a pedacitos."""
+
+    def __init__(self, msg):
+        self.msg = msg
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    def __aiter__(self):
+        async def gen():
+            from types import SimpleNamespace
+            for b in self.msg.content:
+                if b.type == "text":
+                    for i in range(0, len(b.text), 7):
+                        yield SimpleNamespace(type="text", text=b.text[i:i + 7])
+        return gen()
+
+    async def get_final_message(self):
+        return self.msg
+
 
 async def test_agent_saves_memory_and_history(database, monkeypatch):
     fake = FakeClaude([
@@ -494,7 +524,7 @@ async def test_call_flow(database, monkeypatch, sent):
     monkeypatch.setattr(voice, "speak", fake_speak)
     fake = FakeClaude([
         _msg([TextBlock(type="text", text="Hola Andrés, te escucho.")], "end_turn"),
-        _msg([TextBlock(type="text", text="Anotado, mañana te lo recuerdo.")], "end_turn"),
+        _msg([TextBlock(type="text", text="Anotado. Mañana a las nueve te lo recuerdo sin falta, Andrés.")], "end_turn"),
         _msg([TextBlock(type="text", text="• Pediste recordar llamar al proveedor")], "end_turn"),
     ])
     monkeypatch.setattr(agent, "client", lambda: fake)
@@ -507,11 +537,26 @@ async def test_call_flow(database, monkeypatch, sent):
         h = {"X-Call-Token": token}
         r = await c.post("/api/llamada/inicio", json={"voz": "gratis"}, headers=h)
         assert r.json()["texto"] == "Hola Andrés, te escucho." and r.json()["audio"] == "TVAz"
+        assert len(r.json()["muletillas"]) == 5 and r.json()["pausa_ms"] == 900
         r = await c.post("/api/llamada/turno", json={"texto": "Recordame llamar al proveedor"}, headers=h)
-        assert "Anotado" in r.json()["texto"]
+        events = [json.loads(line) for line in r.text.strip().split("\n")]
+        assert [e["type"] for e in events] == ["chunk", "chunk", "done"]
+        assert events[0]["texto"] == "Anotado." and events[1]["texto"].startswith("Mañana a las nueve")
         assert "Llamada de voz" in fake.calls[1]["system"][1]["text"]
         assert fake.calls[1]["model"] == config.settings.model
+        names = {t["name"] for t in fake.calls[1]["tools"]}
+        assert "guardar_memoria" in names and "definir_habitos" not in names
         r = await c.post("/api/llamada/fin", headers=h)
         assert r.json()["ok"]
     assert "Resumen de la llamada" in sent[-1][1]
     assert "Recordame llamar al proveedor" in fake.calls[2]["messages"][-1]["content"][-1]["text"]
+
+
+async def test_sentence_splitter():
+    from jared.call import SentenceSplitter
+    s = SentenceSplitter()
+    out = []
+    for ch in ["Hola, An", "drés. Te es", "cucho. Sí, ", "claro, mañana a las 9 te lo recuerdo. ¿A", "lgo más?"]:
+        out += s.feed(ch)
+    assert out == ["Hola, Andrés.", "Te escucho. Sí, claro, mañana a las 9 te lo recuerdo."]
+    assert s.flush() == ["¿Algo más?"]

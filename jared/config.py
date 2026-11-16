@@ -47,6 +47,7 @@ class Settings:
     elevenlabs_voice_id: str | None
     elevenlabs_model: str
     elevenlabs_monthly_chars: int
+    call_pause_ms: int
 
     @property
     def tz(self) -> ZoneInfo:
@@ -98,6 +99,8 @@ def load() -> Settings:
         elevenlabs_model=_env("ELEVENLABS_MODEL", "eleven_flash_v2_5"),
         # 100.000 caracteres ≈ USD 4 por mes con Flash
         elevenlabs_monthly_chars=int(_env("ELEVENLABS_MONTHLY_CHARS", "100000")),
+        # silencio que espera la llamada antes de considerar que terminaste de hablar
+        call_pause_ms=int(_env("CALL_PAUSE_MS", "900")),
     )
 
 

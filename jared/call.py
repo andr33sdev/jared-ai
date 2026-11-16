@@ -1,14 +1,18 @@
 """Llamada por voz con Jared desde el navegador."""
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
 import logging
+import random
+import re
 import secrets
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, File, Header, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import agent, config, db, telegram, voice
@@ -52,9 +56,98 @@ async def _check(token: str | None) -> None:
         raise HTTPException(status_code=403, detail="Link de llamada inválido")
 
 
-async def _reply(text: str, prefer: str) -> dict:
+FILLERS = ["Mmm, a ver.", "A ver...", "Ajá...", "Bueno...", "Mmm..."]
+_filler_cache: dict[str, list[str]] = {}
+
+
+async def fillers(prefer: str) -> list[str]:
+    """Muletillas cortas en audio (base64), generadas una vez por voz."""
+    if prefer not in _filler_cache:
+        out = []
+        for f in FILLERS:
+            audio, _ = await voice.speak(f, prefer=prefer)
+            if audio:
+                out.append(base64.b64encode(audio).decode())
+        _filler_cache[prefer] = out
+    return _filler_cache[prefer]
+
+
+class SentenceSplitter:
+    """Junta el texto que va llegando y devuelve oraciones completas para decir en voz.
+
+    La primera oración sale apenas termina (aunque sea corta) para que Jared empiece
+    a hablar cuanto antes; las siguientes se agrupan si son muy cortas."""
+
+    BOUND = re.compile(r"[.!?…]+(?=\s)|\n")
+
+    def __init__(self, min_len: int = 25):
+        self.buf = ""
+        self.min_len = min_len
+        self.started = False
+
+    def feed(self, delta: str) -> list[str]:
+        self.buf += delta
+        out = []
+        while True:
+            cut = None
+            for m in self.BOUND.finditer(self.buf):
+                piece = self.buf[: m.end()].strip()
+                if piece and (len(piece) >= self.min_len or not self.started):
+                    cut = m.end()
+                    break
+            if cut is None:
+                break
+            out.append(self.buf[:cut].strip())
+            self.buf = self.buf[cut:]
+            self.started = True
+        return out
+
+    def flush(self) -> list[str]:
+        rest, self.buf = self.buf.strip(), ""
+        return [rest] if rest else []
+
+
+async def _stream_reply(text: str, prefer: str):
+    """Genera NDJSON: un evento por oración (texto + audio) apenas está listo."""
     extra = CALL_MODE.format(name=config.settings.owner_name)
-    reply = await agent.run(text, extra_system=extra, smart=False) or "Perdón, me quedé en blanco. ¿Me repetís?"
+    queue: asyncio.Queue = asyncio.Queue()
+    splitter = SentenceSplitter()
+
+    async def tts(sentence: str):
+        audio, engine = await voice.speak(sentence, prefer=prefer)
+        return sentence, audio, engine
+
+    async def on_text(delta: str):
+        for sentence in splitter.feed(delta):
+            queue.put_nowait(asyncio.create_task(tts(sentence)))
+
+    async def runner():
+        try:
+            reply = await agent.run(text, extra_system=extra, smart=False, light=True, on_text=on_text)
+            for sentence in splitter.flush():
+                queue.put_nowait(asyncio.create_task(tts(sentence)))
+            queue.put_nowait(("done", reply))
+        except Exception as exc:
+            log.exception("Falló el turno de la llamada")
+            queue.put_nowait(("error", str(exc)))
+
+    asyncio.create_task(runner())
+    while True:
+        item = await queue.get()
+        if isinstance(item, tuple):
+            kind, payload = item
+            yield json.dumps({"type": kind, "texto": payload}, ensure_ascii=False) + "\n"
+            return
+        sentence, audio, engine = await item
+        yield json.dumps({
+            "type": "chunk", "texto": sentence, "voz": engine,
+            "audio": base64.b64encode(audio).decode() if audio else None,
+        }, ensure_ascii=False) + "\n"
+
+
+async def _reply(text: str, prefer: str, light: bool = True) -> dict:
+    extra = CALL_MODE.format(name=config.settings.owner_name)
+    reply = await agent.run(text, extra_system=extra, smart=False, light=light) or "Perdón, me quedé en blanco. ¿Me repetís?"
     audio, engine = await voice.speak(reply, prefer=prefer)
     return {
         "texto": reply,
@@ -81,10 +174,12 @@ async def page():
 async def start(body: StartIn, x_call_token: str | None = Header(None)):
     await _check(x_call_token)
     await db.kv_set("call_started", datetime.now(config.settings.tz).isoformat())
-    return await _reply(
-        "(Andrés te acaba de llamar por voz. Atendé con un saludo cortito, a lo Jared, y preguntale en qué lo ayudás.)",
-        body.voz,
+    greeting, muletillas = await asyncio.gather(
+        _reply("(Andrés te acaba de llamar por voz. Atendé con un saludo cortito, a lo Jared, "
+               "y preguntale en qué lo ayudás.)", body.voz, light=True),
+        fillers(body.voz),
     )
+    return {**greeting, "muletillas": muletillas, "pausa_ms": config.settings.call_pause_ms}
 
 
 @router.post("/api/llamada/turno")
@@ -93,7 +188,8 @@ async def turn(body: TurnIn, x_call_token: str | None = Header(None)):
     text = body.texto.strip()
     if not text:
         raise HTTPException(status_code=400, detail="Vacío")
-    return await _reply(text, body.voz)
+    return StreamingResponse(_stream_reply(text, body.voz), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 @router.post("/api/llamada/audio")

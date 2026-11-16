@@ -83,6 +83,8 @@
   let state = "idle";          // idle | listening | thinking | speaking | ended
   let rec = null, buffer = "", silenceTimer = null;
   let recorder = null, chunks = [];
+  let fillers = [], pauseMs = 900;
+  let audioQueue = [], streamDone = true, playing = false, fillerPlaying = false, abortCtl = null;
 
   function setState(s, text) {
     state = s;
@@ -93,32 +95,92 @@
     hang.style.display = (s === "idle" || s === "ended") ? "none" : "inline-block";
   }
 
-  async function api(path, body, isForm) {
+  async function api(path, body, isForm, signal) {
     const res = await fetch(path, {
       method: "POST",
       headers: isForm ? { "X-Call-Token": token } : { "Content-Type": "application/json", "X-Call-Token": token },
       body: isForm ? body : JSON.stringify(body || {}),
+      signal,
     });
     if (res.status === 403) throw new Error("El link venció. Pedile uno nuevo a Jared.");
     if (!res.ok) throw new Error("Algo falló del lado de Jared (" + res.status + ").");
-    return res.json();
+    return res;
   }
 
-  function play(data) {
+  // --- reproducción en cola: Jared empieza a hablar con la primera oración ---
+  function pump() {
+    if (state === "ended" || playing || fillerPlaying) return;
+    if (audioQueue.length) {
+      playing = true;
+      setState("speaking", "Jared está hablando · tocá para interrumpir");
+      player.src = "data:audio/mpeg;base64," + audioQueue.shift();
+      player.onended = () => { playing = false; pump(); };
+      player.play().catch(() => { playing = false; pump(); });
+    } else if (streamDone && state !== "listening") {
+      listen();
+    }
+  }
+
+  function playFiller() {
+    if (!fillers.length) return;
+    fillerPlaying = true;
+    player.src = "data:audio/mpeg;base64," + fillers[Math.floor(Math.random() * fillers.length)];
+    player.onended = () => { fillerPlaying = false; pump(); };
+    player.play().catch(() => { fillerPlaying = false; pump(); });
+  }
+
+  function stopTalking() {
+    if (abortCtl) abortCtl.abort();
+    audioQueue = []; playing = false; fillerPlaying = false; streamDone = true;
+    player.pause();
+  }
+
+  function playSingle(data) {          // respuestas no fraccionadas (saludo, modo grabación)
     jaredEl.textContent = data.texto || "";
-    if (!data.audio) { listen(); return; }
-    setState("speaking", "Jared está hablando · tocá para interrumpir");
-    player.src = "data:audio/mpeg;base64," + data.audio;
-    player.onended = () => { if (state === "speaking") listen(); };
-    player.play().catch(() => listen());
+    streamDone = true;
+    if (data.audio) audioQueue.push(data.audio);
+    pump();
   }
 
   async function send(text) {
     you.textContent = text;
     jaredEl.textContent = "";
     setState("thinking", "Pensando…");
-    try { play(await api("/api/llamada/turno", { texto: text, voz: voice })); }
-    catch (e) { statusEl.textContent = e.message; setTimeout(listen, 1500); }
+    audioQueue = []; streamDone = false;
+    abortCtl = new AbortController();
+    playFiller();
+    try {
+      const res = await api("/api/llamada/turno", { texto: text, voz: voice }, false, abortCtl.signal);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let pending = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        pending += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = pending.indexOf("\n")) >= 0) {
+          const line = pending.slice(0, nl).trim();
+          pending = pending.slice(nl + 1);
+          if (!line) continue;
+          const ev = JSON.parse(line);
+          if (ev.type === "chunk") {
+            jaredEl.textContent = (jaredEl.textContent + " " + ev.texto).trim();
+            if (ev.audio) audioQueue.push(ev.audio);
+            pump();
+          } else if (ev.type === "error") {
+            throw new Error("Algo falló del lado de Jared.");
+          }
+        }
+      }
+      streamDone = true;
+      pump();
+    } catch (e) {
+      if (e.name === "AbortError") return;
+      statusEl.textContent = e.message;
+      streamDone = true;
+      setTimeout(() => { if (state === "thinking") listen(); }, 1500);
+    }
   }
 
   // --- escuchar con el reconocimiento de voz del navegador ---
@@ -141,7 +203,7 @@
       }
       you.textContent = (buffer + interim).trim();
       clearTimeout(silenceTimer);
-      silenceTimer = setTimeout(finishTurn, 1300);
+      silenceTimer = setTimeout(finishTurn, pauseMs);
     };
     rec.onerror = (ev) => {
       if (ev.error === "not-allowed") statusEl.textContent = "Necesito permiso para usar el micrófono.";
@@ -173,10 +235,10 @@
       const form = new FormData();
       form.append("audio", blob, "voz");
       try {
-        const data = await api("/api/llamada/audio?voz=" + voice, form, true);
+        const data = await (await api("/api/llamada/audio?voz=" + voice, form, true)).json();
         you.textContent = data.oido || "";
         if (!data.oido) { statusEl.textContent = "No te escuché bien, probá de nuevo."; listen(); return; }
-        play(data);
+        playSingle(data);
       } catch (e) { statusEl.textContent = e.message; setTimeout(listen, 1500); }
     };
     recorder.start();
@@ -190,10 +252,15 @@
       you.textContent = ""; jaredEl.textContent = "";
       player.src = "data:audio/mpeg;base64,"; player.play().catch(() => {}); // habilita el audio en iPhone
       setState("thinking", "Llamando…");
-      try { play(await api("/api/llamada/inicio", { voz: voice })); }
+      try {
+        const data = await (await api("/api/llamada/inicio", { voz: voice })).json();
+        fillers = data.muletillas || [];
+        pauseMs = data.pausa_ms || 900;
+        playSingle(data);
+      }
       catch (e) { setState("idle", e.message); }
-    } else if (state === "speaking") {
-      player.pause();
+    } else if (state === "speaking" || state === "thinking") {
+      stopTalking();
       listen();
     } else if (state === "listening" && SR) {
       finishTurn();
@@ -207,7 +274,7 @@
     const wasActive = state !== "idle" && state !== "ended";
     state = "ended";
     try { rec && rec.abort(); } catch (_) {}
-    player.pause();
+    stopTalking();
     stopRecording();
     setState("ended", "Llamada terminada. Te mando el resumen por Telegram.");
     if (wasActive) { try { await api("/api/llamada/fin"); } catch (_) {} }

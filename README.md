@@ -85,6 +85,7 @@ Decile a Jared "te llamo" y te manda un botón 📞. Se abre una página donde h
 - **Voz premium (ElevenLabs):** creá una cuenta en elevenlabs.io → **API Keys** → `ELEVENLABS_API_KEY`. En **Voices → Explore** filtrá por *Spanish* y acento *Argentinian*, elegí una voz masculina y copiá su *Voice ID* → `ELEVENLABS_VOICE_ID`.
 - **Tope de gasto:** `ELEVENLABS_MONTHLY_CHARS` (por defecto 100.000 caracteres, unos USD 4). Al 90 % te avisa, y al llegar al tope sigue con la voz gratis hasta el mes siguiente. Desde la página podés cambiar entre la voz premium y la gratis.
 - Si compartiste el link sin querer, decile "generá un link nuevo de llamada" y el anterior deja de funcionar.
+- **Velocidad:** Jared empieza a hablar con la primera oración mientras arma el resto, y apenas terminás suena una muletilla corta ("A ver…"). `CALL_PAUSE_MS` (900 por defecto) es el silencio que espera antes de responder: si te corta cuando hacés pausas para pensar, subilo a 1200.
 
 ---
 
