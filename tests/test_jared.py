@@ -402,7 +402,7 @@ async def test_important_dates(database, monkeypatch, sent):
     fake = FakeClaude([_msg([TextBlock(type="text", text="Mañana vence el seguro. En una semana cumple Juan.")], "end_turn")])
     monkeypatch.setattr(agent, "client", lambda: fake)
     await scheduler.important_dates()
-    prompt = fake.calls[0]["messages"][-1]["content"]
+    prompt = fake.calls[0]["messages"][-1]["content"][-1]["text"]
     assert "Cumpleaños de Juan" in prompt and "Algo lejano" not in prompt
     assert sent and "seguro" in sent[0][1]
 
@@ -435,3 +435,22 @@ async def test_natural_language_modes(database):
     await extras.respuestas_en_audio(True)
     assert await db.kv_get("voice_replies") is True
     assert "mes_usd" in json.loads(await extras.ver_costo())
+
+
+async def test_model_routing_and_cache(database, monkeypatch):
+    fake = FakeClaude([
+        _msg([ToolUseBlock(id="t1", type="tool_use", name="listar_recordatorios", input={})], "tool_use"),
+        _msg([TextBlock(type="text", text="Nada pendiente.")], "end_turn"),
+        _msg([TextBlock(type="text", text="Contame.")], "end_turn"),
+    ])
+    monkeypatch.setattr(agent, "client", lambda: fake)
+    await agent.run("¿Qué recordatorios tengo?")
+    assert fake.calls[0]["model"] == config.settings.model == "claude-haiku-5-5"
+    # una sola marca de caché en los mensajes, siempre en el último
+    for call in fake.calls[:2]:
+        marks = [b for m in call["messages"] if isinstance(m["content"], list)
+                 for b in m["content"] if isinstance(b, dict) and "cache_control" in b]
+        assert len(marks) == 1 and "cache_control" in call["messages"][-1]["content"][-1]
+    await extras.modo_charla(True)
+    await agent.run("Quiero pensar en voz alta")
+    assert fake.calls[2]["model"] == "claude-sonnet-5-5"

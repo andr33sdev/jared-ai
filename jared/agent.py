@@ -29,7 +29,7 @@ def tools() -> list[dict]:
     web = {
         "type": "web_search_20250305",
         "name": "web_search",
-        "max_uses": 5,
+        "max_uses": 3,
         "user_location": {
             "type": "approximate",
             "city": config.settings.city,
@@ -133,6 +133,7 @@ async def run(
     save: bool = True,
     extra_system: str = "",
     max_steps: int = 15,
+    smart: bool | None = None,
 ) -> str:
     """Corre un turno completo de Jared y devuelve el texto final.
 
@@ -141,11 +142,14 @@ async def run(
     """
     async with lock:
         mode = await db.kv_get("mode")
+        if smart is None:
+            smart = mode == "charla" or _has_document(user_content)
+        model = config.settings.model_smart if smart else config.settings.model
         system = [
             {"type": "text", "text": persona.persona(), "cache_control": {"type": "ephemeral"}},
             {"type": "text", "text": await context_block(mode) + ("\n\n" + extra_system if extra_system else "")},
         ]
-        messages = _history_to_messages(await db.recent_messages(24)) if use_history else []
+        messages = _history_to_messages(await db.recent_messages(16)) if use_history else []
         if messages and messages[-1]["role"] == "user":
             messages.append({"role": "assistant", "content": "(sigo atento)"})
         messages.append({"role": "user", "content": user_content})
@@ -153,14 +157,14 @@ async def run(
         final_text = ""
         for _ in range(max_steps):
             resp = await client().messages.create(
-                model=config.settings.model,
+                model=model,
                 max_tokens=4000,
                 system=system,
                 tools=tools(),
-                messages=messages,
+                messages=_with_cache_breakpoint(messages),
             )
             try:
-                await usage.record(config.settings.model, resp.usage)
+                await usage.record(model, resp.usage)
             except Exception:
                 log.exception("No pude registrar el uso")
             messages.append({"role": "assistant", "content": [_dump(b) for b in resp.content]})
@@ -188,6 +192,36 @@ async def run(
             if final_text:
                 await db.add_message("assistant", final_text)
         return final_text
+
+
+def _has_document(content: Any) -> bool:
+    return isinstance(content, list) and any(b.get("type") == "document" for b in content)
+
+
+def _with_cache_breakpoint(messages: list[dict]) -> list[dict]:
+    """Marca el último mensaje del usuario para que la API cachee todo lo anterior.
+
+    En cada vuelta del ciclo de herramientas se reenvía la conversación entera;
+    así esa parte se cobra al 10% en vez de precio completo.
+    """
+    out = []
+    for i, m in enumerate(messages):
+        content = m["content"]
+        is_last = i == len(messages) - 1
+        if isinstance(content, list):
+            blocks = []
+            for b in content:
+                if isinstance(b, dict) and "cache_control" in b:
+                    b = {k: v for k, v in b.items() if k != "cache_control"}
+                blocks.append(b)
+            content = blocks
+        if is_last and m["role"] == "user":
+            if isinstance(content, str):
+                content = [{"type": "text", "text": content}]
+            if content:
+                content = [*content[:-1], {**content[-1], "cache_control": {"type": "ephemeral"}}]
+        out.append({"role": m["role"], "content": content})
+    return out
 
 
 def _text_of(blocks: list) -> str:

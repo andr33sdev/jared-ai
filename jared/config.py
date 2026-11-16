@@ -16,6 +16,7 @@ def _env(name: str, default: str | None = None) -> str | None:
 class Settings:
     anthropic_api_key: str | None
     model: str
+    model_smart: str
     telegram_token: str | None
     owner_id: int | None
     owner_name: str
@@ -60,7 +61,8 @@ def load() -> Settings:
     )
     return Settings(
         anthropic_api_key=_env("ANTHROPIC_API_KEY"),
-        model=_env("JARED_MODEL", "claude-sonnet-5-5"),
+        model=_env("JARED_MODEL", "claude-haiku-5-5"),
+        model_smart=_env("JARED_MODEL_SMART", "claude-sonnet-5-5"),
         telegram_token=token,
         owner_id=int(owner) if owner else None,
         owner_name=_env("OWNER_NAME", "Andrés"),

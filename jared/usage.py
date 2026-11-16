@@ -6,8 +6,9 @@ from .tools import now_local
 
 # USD por millón de tokens (entrada, salida, escritura de caché, lectura de caché)
 PRICES = {
-    "claude-sonnet": (2.0, 10.0, 2.5, 0.2),
+    "claude-sonnet": (2.0, 10.0, 2.5, 0.1),
     "claude-opus": (4.0, 20.0, 5.0, 0.2),
+    "claude-haiku-5": (0.10, 0.50, 0.125, 0.01),
     "claude-haiku": (1.0, 5.0, 1.25, 0.1),
 }
 SEARCH_PRICE = 10.0 / 1000  # USD por búsqueda web

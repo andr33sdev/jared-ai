@@ -95,7 +95,12 @@ Los horarios automáticos se cambian con `BRIEF_TIME`, `CHECKIN_TIME`, `REFLECTI
 
 ## Costos
 - Render, Supabase, cron-job.org, Groq y Telegram: gratis.
-- Claude: se paga por uso, y las búsquedas web se cobran aparte (alrededor de USD 0,01 cada una). Con uso diario normal (resumen matinal con novedades, chequeo, reflexión y algunas charlas) calculá **aprox. USD 5–15 por mes**. Si querés gastar menos, poné `NEWS_IN_BRIEF=false`.
+- Claude se paga por uso. Para que salga barato, Jared usa dos modelos:
+  - **Claude Haiku 5.5** para el día a día y las tareas automáticas. Es unas 20 veces más barato que Sonnet.
+  - **Claude Sonnet 5.5** solo para el modo charla y para leer documentos, donde conviene más inteligencia.
+- Además, la conversación se guarda en caché para no pagarla completa en cada vuelta, y cada respuesta hace como máximo 3 búsquedas web (alrededor de USD 0,01 cada una).
+- Costo estimado: **USD 1–4 por mes** con uso diario. Lo que más pesa son las búsquedas web del resumen matinal; si querés bajarlo, poné `NEWS_IN_BRIEF=false`.
+- Si un día preferís que todo use Sonnet, cambiá `JARED_MODEL` a `claude-sonnet-5-5`.
 
 ## Límites conocidos
 - Los bots de Telegram no pueden hacer llamadas de voz reales. Lo de "llamarlo" se resuelve con el modo charla y audios de ida y vuelta.
