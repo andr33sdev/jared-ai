@@ -62,6 +62,21 @@ def next_occurrence(due: datetime, recurrence: str, after: datetime) -> datetime
     return None
 
 
+DIAS_CORTOS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
+REPITE = {"daily": "todos los días", "weekdays": "días hábiles", "weekly": "cada semana", "monthly": "cada mes"}
+
+
+def when_label(dt: datetime) -> str:
+    """'hoy 15:36', 'mañana 09:00', 'jue 19/11 13:45'."""
+    d = dt.astimezone(config.settings.tz)
+    days = (d.date() - now_local().date()).days
+    if days == 0:
+        return f"hoy {d:%H:%M}"
+    if days == 1:
+        return f"mañana {d:%H:%M}"
+    return f"{DIAS_CORTOS[d.weekday()]} {d:%d/%m %H:%M}"
+
+
 def _jsonable(obj: Any) -> Any:
     if isinstance(obj, (datetime, date)):
         if isinstance(obj, datetime):
@@ -176,7 +191,7 @@ async def crear_recordatorio(texto: str, cuando: str, repetir: str = "none") -> 
         return _out({"ok": False, "error": "La fecha ya pasó"})
     row = await db.fetchrow(
         "insert into reminders (text, due_at, recurrence) values (%s, %s, %s) returning id, due_at",
-        texto.strip(), due, repetir,
+        texto.strip().rstrip(".")[:120], due, repetir,
     )
     return _out({"ok": True, "id": row["id"], "cuando": row["due_at"], "repetir": repetir})
 
@@ -313,7 +328,7 @@ TOOL_DEFS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "texto": {"type": "string", "description": "Qué recordarle, redactado como se lo vas a decir"},
+                "texto": {"type": "string", "description": "Título corto de QUÉ es (máx. 8 palabras), sin fecha ni hora. Ej: 'Reunión ISO en Conoflex', 'Pasarle a Jared qué llevar a la reunión ISO'. NO escribas el mensaje que le vas a mandar."},
                 "cuando": {"type": "string", "description": "Fecha y hora ISO, hora local de Andrés (ej. 2026-11-17T09:30)"},
                 "repetir": {"type": "string", "enum": RECURRENCES, "default": "none"},
             },

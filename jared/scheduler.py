@@ -56,9 +56,9 @@ async def send_due_reminders() -> None:
     for r in rows:
         due_local = r["due_at"].astimezone(config.settings.tz)
         late = now_local() - due_local > timedelta(minutes=LATE_REMINDER_MINUTES)
-        text = f"⏰ {r['text']}"
+        text = f"⏰ **Recordatorio:** {r['text']}"
         if late:
-            text = f"⏰ (Perdón, este era para las {due_local:%H:%M} y se me pasó) {r['text']}"
+            text += f"\n(Era para las {due_local:%H:%M}, perdón la demora.)"
         await telegram.send_message(owner, text)
         nxt = next_occurrence(r["due_at"], r["recurrence"], now_local())
         if nxt:

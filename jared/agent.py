@@ -9,7 +9,7 @@ from typing import Any
 from anthropic import AsyncAnthropic
 
 from . import config, db, persona
-from .tools import TOOL_DEFS, now_local, run_tool
+from .tools import TOOL_DEFS, now_local, run_tool, when_label
 
 log = logging.getLogger("jared.agent")
 
@@ -75,7 +75,7 @@ async def context_block(mode: str | None) -> str:
     if rems:
         tz = config.settings.tz
         parts.append("## Recordatorios próximos (7 días)\n" + "\n".join(
-            f"- [{r['id']}] {r['due_at'].astimezone(tz):%a %d/%m %H:%M} — {r['text']}"
+            f"- [{r['id']}] {when_label(r['due_at'])} — {r['text']}"
             + ("" if r["recurrence"] == "none" else f" (se repite: {r['recurrence']})")
             for r in rems))
 

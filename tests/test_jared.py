@@ -65,7 +65,7 @@ async def test_reminders_fire_and_repeat(database, sent):
         tools.parse_dt(past), tools.parse_dt(past),
     )
     await scheduler.send_due_reminders()
-    assert [t for _, t in sent] == ["⏰ Tomar agua", "⏰ Llamar a Juan"]
+    assert [t for _, t in sent] == ["⏰ **Recordatorio:** Tomar agua", "⏰ **Recordatorio:** Llamar a Juan"]
     rows = await db.fetch("select text, done, due_at from reminders order by id")
     assert rows[0]["done"] is False and rows[0]["due_at"] > datetime.now(config.settings.tz)
     assert rows[1]["done"] is True
@@ -171,7 +171,7 @@ async def test_late_reminder_is_flagged(database, sent):
     late = tools.now_local() - timedelta(hours=1)
     await db.execute("insert into reminders (text, due_at) values ('Llamar a Juan', %s)", late)
     await scheduler.send_due_reminders()
-    assert "se me pasó" in sent[0][1] and f"{late:%H:%M}" in sent[0][1]
+    assert "perdón la demora" in sent[0][1] and f"{late:%H:%M}" in sent[0][1]
 
 
 async def test_missed_daily_job_is_skipped(database, monkeypatch):
@@ -187,3 +187,10 @@ async def test_missed_daily_job_is_skipped(database, monkeypatch):
     monkeypatch.setattr(scheduler, "JOBS", [("brief", "brief_time", fake_job)])
     await scheduler.daily_jobs()
     assert calls == []
+
+
+async def test_when_label():
+    now = tools.now_local().replace(hour=10, minute=0)
+    assert tools.when_label(now) == "hoy 10:00"
+    assert tools.when_label(now + timedelta(days=1)) == "mañana 10:00"
+    assert tools.when_label(now + timedelta(days=3)).endswith(f"{(now + timedelta(days=3)):%d/%m} 10:00")

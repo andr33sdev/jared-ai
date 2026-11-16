@@ -10,6 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from . import agent, config, db, scheduler, telegram, voice
+from .tools import when_label
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("jared")
@@ -210,8 +211,7 @@ async def handle_command(chat_id: int, text: str) -> bool:
         if not rows:
             await telegram.send_message(chat_id, "No tenés recordatorios pendientes. Todo en orden. ✨")
         else:
-            tz = config.settings.tz
-            lines = [f"• {r['due_at'].astimezone(tz):%d/%m %H:%M} — {r['text']}"
+            lines = [f"• {when_label(r['due_at'])} — {r['text']}"
                      + ("" if r["recurrence"] == "none" else " 🔁") for r in rows]
             await telegram.send_message(chat_id, "**Recordatorios pendientes**\n" + "\n".join(lines))
         return True
