@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from datetime import date, timedelta
 
-from . import agent, call, config, db, extras, gmail, scheduler, telegram, tools, usage, voice
+from . import agent, call, config, db, extras, gmail, proactive, scheduler, telegram, tools, usage, voice
 from .tools import now_local, when_label
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -288,6 +288,14 @@ async def handle_callback(cb: dict) -> None:
                     record_as="(eligió avanzar con una idea)",
                 )
             await telegram.send_message(chat_id, reply)
+        return
+
+    if kind == "fb":
+        ok = action == "up"
+        tema = await proactive.record_feedback(parts[2] if len(parts) > 2 else "", ok)
+        await telegram.answer_callback(cb["id"], "¡Anotado! Te traigo más de esto." if ok else "Entendido, ajusto el radar.")
+        if tema:
+            await telegram.edit_buttons(chat_id, message_id, [[("👍 Te sirvió" if ok else "👎 No iba", "noop")]])
         return
 
     if kind == "esp":

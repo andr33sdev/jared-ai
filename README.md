@@ -22,6 +22,10 @@ Asistente personal por Telegram con Claude como cerebro. Tiene la personalidad d
 - **Documentos:** le mandás un PDF, lo resume, lo guarda y después le podés preguntar sobre él.
 - **Fechas importantes:** cumpleaños, aniversarios y vencimientos. Avisa 7 días antes, el día anterior y el mismo día, con ideas de regalo.
 - **Hábitos:** a las 21:30 te pregunta con botones y lleva tus rachas.
+- **Iniciativa propia:**
+  - Martes, jueves y sábado a las 12:30 te trae un 💡 hallazgo de internet según tus intereses y proyectos.
+  - Lunes, miércoles y viernes a las 18:30 te entrega un 🛠️ trabajo ya hecho sobre algo de tu día: un mail, un checklist, un cálculo o un plan.
+  - Los calificás con 👍/👎 y va aprendiendo qué te sirve. Si no encontró nada que valga la pena, no te escribe.
 
 **Arquitectura:** Python con FastAPI. Telegram le avisa cada mensaje nuevo por webhook, Claude (Sonnet 5.5) hace de cerebro con herramientas y búsqueda web, y la base es Postgres en Supabase. Corre en Render (plan gratis) y tiene un reloj interno que revisa cada minuto si hay recordatorios o tareas pendientes.
 
@@ -101,7 +105,7 @@ No hay comandos: a Jared le hablás como a una persona. Por ejemplo:
 
 Solo quedan dos comandos de sistema: `/resumen` (el resumen del día en el momento) y `/gmail` (para conectar el correo).
 
-Los horarios automáticos se cambian con `BRIEF_TIME`, `CHECKIN_TIME`, `REFLECTION_TIME`, `WEEKLY_TIME`/`WEEKLY_DAY` e `IDEAS_TIME`/`IDEAS_DAY`, más `DATES_TIME` (09:30), `WAITS_TIME` (10:00) y `HABITS_TIME` (21:30) (los días van de 0 = lunes a 6 = domingo). Con `MEETING_PREP=false` se apaga la ayuda-memoria de reuniones.
+Los horarios automáticos se cambian con `BRIEF_TIME`, `CHECKIN_TIME`, `REFLECTION_TIME`, `WEEKLY_TIME`/`WEEKLY_DAY` e `IDEAS_TIME`/`IDEAS_DAY`, más `DISCOVERY_TIME`/`DISCOVERY_DAYS`, `IMPROVE_TIME`/`IMPROVE_DAYS` (listas como `1,3,5`), `DATES_TIME` (09:30), `WAITS_TIME` (10:00) y `HABITS_TIME` (21:30) (los días van de 0 = lunes a 6 = domingo). Con `MEETING_PREP=false` se apaga la ayuda-memoria de reuniones.
 
 ## Costos
 - Render, Supabase, cron-job.org, Groq y Telegram: gratis.

@@ -49,6 +49,10 @@ class Settings:
     elevenlabs_monthly_chars: int
     call_pause_ms: int
     elevenlabs_stt_model: str
+    discovery_time: str
+    discovery_days: list[int]
+    improve_time: str
+    improve_days: list[int]
 
     @property
     def tz(self) -> ZoneInfo:
@@ -57,6 +61,10 @@ class Settings:
     @property
     def calendar_enabled(self) -> bool:
         return bool(self.google_sa_json and self.google_calendar_id)
+
+
+def _days(value: str) -> list[int]:
+    return [int(d) for d in value.replace(" ", "").split(",") if d.isdigit()]
 
 
 def load() -> Settings:
@@ -103,6 +111,12 @@ def load() -> Settings:
         # silencio que espera la llamada antes de considerar que terminaste de hablar
         call_pause_ms=int(_env("CALL_PAUSE_MS", "900")),
         elevenlabs_stt_model=_env("ELEVENLABS_STT_MODEL", "scribe_v2"),
+        # Hallazgos de internet: martes, jueves y sábado al mediodía
+        discovery_time=_env("DISCOVERY_TIME", "12:30"),
+        discovery_days=_days(_env("DISCOVERY_DAYS", "1,3,5")),
+        # Mejoras sobre tu día a día: lunes, miércoles y viernes a la tarde
+        improve_time=_env("IMPROVE_TIME", "18:30"),
+        improve_days=_days(_env("IMPROVE_DAYS", "0,2,4")),
     )
 
 

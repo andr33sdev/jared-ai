@@ -6,7 +6,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 
-from . import agent, config, db, extras, gcal, telegram
+from . import agent, config, db, extras, gcal, proactive, telegram
 from .tools import next_occurrence, now_local
 
 log = logging.getLogger("jared.scheduler")
@@ -248,6 +248,8 @@ JOBS = [
     ("dates", "dates_time", important_dates, None),
     ("waits", "waits_time", waiting_followups, None),
     ("habits", "habits_time", habits_check, None),
+    ("discovery", "discovery_time", proactive.discovery, "discovery_days"),
+    ("improve", "improve_time", proactive.improvement, "improve_days"),
 ]
 
 
@@ -256,8 +258,10 @@ async def daily_jobs() -> None:
     today = now.date().isoformat()
     last_runs: dict = await db.kv_get("last_runs", {})
     for key, attr, fn, day_attr in JOBS:
-        if day_attr is not None and now.weekday() != getattr(config.settings, day_attr):
-            continue
+        if day_attr is not None:
+            days = getattr(config.settings, day_attr)
+            if now.weekday() not in (days if isinstance(days, list) else [days]):
+                continue
         h, m = _parse_hhmm(getattr(config.settings, attr))
         scheduled = now.replace(hour=h, minute=m, second=0, microsecond=0)
         if last_runs.get(key) == today or not (scheduled <= now <= scheduled + timedelta(minutes=JOB_GRACE_MINUTES)):

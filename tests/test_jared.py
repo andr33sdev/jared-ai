@@ -603,3 +603,53 @@ async def test_transcribe_uses_elevenlabs_without_groq(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler)))
     assert await voice.transcribe(b"OGG") == "hola Jared"
     assert seen["url"].endswith("/v1/speech-to-text") and seen["key"] == "k"
+
+
+# --- iniciativa propia ----------------------------------------------------
+
+async def test_discovery_and_feedback(database, monkeypatch, tg_calls):
+    from jared import proactive
+    fake = FakeClaude([
+        _msg([TextBlock(type="text", text="💡 Filamento PETG en oferta\nTe sirve para las piezas al sol.\nhttps://x.com\nTEMA: filamento PETG oferta")], "end_turn"),
+        _msg([TextBlock(type="text", text="NADA")], "end_turn"),
+    ])
+    monkeypatch.setattr(agent, "client", lambda: fake)
+    assert await proactive.discovery() is True
+    send = [p for m, p in tg_calls if m == "sendMessage"][-1]
+    assert "TEMA" not in send["text"] and "Filamento PETG" in send["text"]
+    data = send["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    assert data == "fb:up:1"
+    await handle_update(_cb(data, text=send["text"]))
+    assert (await db.kv_get("proactive_feedback"))[0]["ok"] is True
+    n = len([m for m, _ in tg_calls if m == "sendMessage"])
+    assert await proactive.discovery() is False  # NADA: no manda nada
+    assert len([m for m, _ in tg_calls if m == "sendMessage"]) == n
+    prompt = fake.calls[1]["messages"][-1]["content"][-1]["text"]
+    assert "filamento PETG oferta" in prompt and "👍" in prompt
+
+
+async def test_improvement_uses_smart_model(database, monkeypatch, tg_calls):
+    from jared import proactive
+    await db.add_message("user", "Tengo que reclamarle a Juan el presupuesto de moldes")
+    fake = FakeClaude([_msg([TextBlock(type="text", text="🛠️ Te armé el mail para Juan\nHola Juan...\nTEMA: mail a Juan")], "end_turn")])
+    monkeypatch.setattr(agent, "client", lambda: fake)
+    assert await proactive.improvement() is True
+    assert fake.calls[0]["model"] == config.settings.model_smart
+    assert "reclamarle a Juan" in fake.calls[0]["messages"][-1]["content"][-1]["text"]
+
+
+async def test_jobs_with_day_lists(database, monkeypatch):
+    calls = []
+
+    async def job():
+        calls.append(1)
+
+    now = tools.now_local()
+    monkeypatch.setattr(config.settings, "discovery_time", f"{now.hour:02d}:{now.minute:02d}")
+    monkeypatch.setattr(config.settings, "discovery_days", [(now.weekday() + 1) % 7])
+    monkeypatch.setattr(scheduler, "JOBS", [("discovery", "discovery_time", job, "discovery_days")])
+    await scheduler.daily_jobs()
+    assert calls == []
+    monkeypatch.setattr(config.settings, "discovery_days", [now.weekday()])
+    await scheduler.daily_jobs()
+    assert calls == [1]
