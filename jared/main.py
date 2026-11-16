@@ -33,7 +33,10 @@ async def lifespan(app: FastAPI):
     s = config.settings
     tasks = []
     if s.database_url:
-        await db.init(s.database_url)
+        try:
+            await db.init(s.database_url)
+        except Exception:
+            log.exception("No pude conectarme a la base de datos (revisá DATABASE_URL)")
     else:
         log.error("Falta DATABASE_URL")
     if s.telegram_token and s.public_url:
@@ -74,17 +77,23 @@ async def telegram_webhook(request: Request):
 
 
 async def _safe_handle(update: dict) -> None:
+    msg = update.get("message") or {}
+    chat = (msg.get("chat") or {}).get("id")
+    log.info("Update %s recibido del chat %s", update.get("update_id"), chat)
     try:
-        if not await db.mark_update(update.get("update_id", 0)):
-            return
+        if config.settings.owner_id is not None:
+            if not await db.mark_update(update.get("update_id", 0)):
+                return
         await handle_update(update)
-    except Exception:
+    except Exception as exc:
         log.exception("Error manejando update")
-        msg = update.get("message") or {}
-        chat = (msg.get("chat") or {}).get("id")
-        if chat and chat == config.settings.owner_id:
+        if chat and config.settings.owner_id in (None, chat):
             with contextlib.suppress(Exception):
-                await telegram.send_message(chat, "Perdón, se me trabó algo de mi lado. ¿Me lo repetís en un ratito?")
+                await telegram.send_message(
+                    chat,
+                    "Perdón, se me trabó algo de mi lado.\n"
+                    f"Detalle técnico: {type(exc).__name__}: {str(exc)[:300]}",
+                )
 
 
 async def handle_update(update: dict) -> None:
