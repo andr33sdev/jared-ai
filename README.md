@@ -94,6 +94,17 @@ Decile a Jared "te llamo" y te manda un botón 📞. Se abre una página donde h
 
 ---
 
+## Alternativa: VPS propio (siempre prendido, sin despertador)
+Sirve cualquier VPS con Ubuntu 22.04/24.04 o Debian 12, 1 vCPU y 1 GB de RAM (con 512 MB también anda).
+1. Entrá por SSH como root y corré:
+   `curl -fsSL https://raw.githubusercontent.com/andr33sdev/jared-ai/main/deploy/install.sh | bash`
+2. Instala Python, Jared y Caddy, que da HTTPS automático con una dirección gratuita `IP.sslip.io`, sin comprar dominio.
+3. Cargá tus claves con `nano /opt/jared/.env` (las mismas que tenías en Render) y ejecutá `systemctl restart jared`.
+4. Para actualizar a la última versión: `jared-update`. Para ver los logs: `journalctl -u jared -f`.
+5. **Importante:** borrá el servicio de Render. Si no, cuando se reactive el 1° del mes le "roba" el webhook de Telegram al VPS.
+
+La base de datos sigue en Supabase, así que no se pierde nada de la memoria.
+
 ## Uso
 No hay comandos: a Jared le hablás como a una persona. Por ejemplo:
 - "Te llamo" te manda el botón para hablarle por voz en vivo.

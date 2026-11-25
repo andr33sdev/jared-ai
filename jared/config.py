@@ -64,6 +64,17 @@ class Settings:
         return bool(self.google_sa_json and self.google_calendar_id)
 
 
+def _read_file(path: str | None) -> str | None:
+    """Para el VPS: el JSON de Google va en un archivo aparte (no entra en una sola línea del .env)."""
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
 def _days(value: str) -> list[int]:
     return [int(d) for d in value.replace(" ", "").split(",") if d.isdigit()]
 
@@ -89,7 +100,7 @@ def load() -> Settings:
         public_url=(_env("PUBLIC_URL") or _env("RENDER_EXTERNAL_URL")),
         webhook_secret=secret,
         groq_api_key=_env("GROQ_API_KEY"),
-        google_sa_json=_env("GOOGLE_SERVICE_ACCOUNT_JSON"),
+        google_sa_json=_env("GOOGLE_SERVICE_ACCOUNT_JSON") or _read_file(_env("GOOGLE_SERVICE_ACCOUNT_FILE")),
         google_calendar_id=_env("GOOGLE_CALENDAR_ID"),
         brief_time=_env("BRIEF_TIME", "08:00"),
         checkin_time=_env("CHECKIN_TIME", "16:00"),
