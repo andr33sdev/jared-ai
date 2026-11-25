@@ -291,7 +291,8 @@ async def mostrar_pendientes() -> str:
     buttons = [[(f"✅ {i}", f"task:done:{r['id']}") for i, r in list(enumerate(rows, 1))[j:j + 5]]
                for j in range(0, len(rows), 5)]
     await telegram.send_message(config.settings.owner_id,
-                                "**Tareas abiertas** (tocá ✅ para cerrar)\n" + "\n".join(lines),
+                                f"**Tus tareas abiertas, {config.settings.owner_name}.** Tocá ✅ en las que ya hiciste: "
+                                "no sabés el placer que me da verlas cerrarse.\n" + "\n".join(lines),
                                 buttons=buttons)
     return _out({"ok": True, "tareas": len(rows),
                  "nota": "Ya le mostré la lista con botones. No la repitas: como mucho una línea breve o nada."})

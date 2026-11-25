@@ -6,7 +6,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 
-from . import agent, config, db, extras, gcal, proactive, telegram
+from . import agent, config, db, extras, gcal, persona, proactive, telegram
 from .tools import next_occurrence, now_local
 
 log = logging.getLogger("jared.scheduler")
@@ -77,7 +77,7 @@ async def send_due_reminders() -> None:
     for r in rows:
         due_local = r["due_at"].astimezone(config.settings.tz)
         late = now_local() - due_local > timedelta(minutes=LATE_REMINDER_MINUTES)
-        text = f"⏰ **Recordatorio:** {r['text']}"
+        text = f"⏰ **Recordatorio:** {r['text']}\n{persona.line(persona.REMINDER_LINES)}"
         if late:
             text += f"\n(Era para las {due_local:%H:%M}, perdón la demora.)"
         buttons = [[("✅ Hecho", f"rem:done:{r['id']}"),
@@ -123,7 +123,7 @@ async def calendar_alerts(minutes_before: int = 30) -> None:
                 log.exception("Falló la preparación de la reunión")
         if prep.strip().upper().rstrip(".") == "NADA":
             prep = ""
-        message = header + ("\n\n" + prep if prep else "")
+        message = header + ("\n\n" + prep if prep else "\n" + persona.line(persona.CALENDAR_LINES))
         await telegram.send_message(owner, message)
         await db.add_message("assistant", f"(Aviso automático de reunión) {message}")
 
@@ -224,7 +224,7 @@ async def waiting_followups() -> None:
         await db.execute("update memories set reviewed_at = now() where id = %s", w["id"])
         await telegram.send_message(
             config.settings.owner_id,
-            f"⏳ **¿Llegó?** {w['content']}",
+            f"⏳ {config.settings.owner_name}, perdón que pregunte: **¿llegó esto?**\n{w['content']}",
             buttons=[[("✅ Llegó", f"esp:ok:{w['id']}"), ("❌ Todavía no", f"esp:no:{w['id']}")]],
         )
 
@@ -235,7 +235,7 @@ async def habits_check() -> None:
         return
     day = now_local().strftime("%Y%m%d")
     rows = [[(f"✅ {h}", f"hab:{i}:1:{day}"), ("❌", f"hab:{i}:0:{day}")] for i, h in enumerate(habits)]
-    await telegram.send_message(config.settings.owner_id, "🌙 ¿Cómo te fue hoy con tus hábitos?", buttons=rows)
+    await telegram.send_message(config.settings.owner_id, f"🌙 {config.settings.owner_name}, ¿me ayudás a completar la planilla de hábitos de hoy? Es mi momento favorito del día.", buttons=rows)
 
 
 # (clave, horario, función, día de la semana o None = todos los días)

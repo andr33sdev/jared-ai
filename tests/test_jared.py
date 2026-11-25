@@ -67,7 +67,8 @@ async def test_reminders_fire_and_repeat(database, sent):
         tools.parse_dt(past), tools.parse_dt(past),
     )
     await scheduler.send_due_reminders()
-    assert [t for _, t in sent] == ["⏰ **Recordatorio:** Tomar agua", "⏰ **Recordatorio:** Llamar a Juan"]
+    assert [t.split("\n")[0] for _, t in sent] == ["⏰ **Recordatorio:** Tomar agua", "⏰ **Recordatorio:** Llamar a Juan"]
+    assert all("Andrés" in t for _, t in sent)
     rows = await db.fetch("select text, done, due_at from reminders order by id")
     assert rows[0]["done"] is False and rows[0]["due_at"] > datetime.now(config.settings.tz)
     assert rows[1]["done"] is True
@@ -380,7 +381,7 @@ async def test_wait_followup_buttons(database, tg_calls, monkeypatch):
     await extras.registrar_espera("mandar el presupuesto", "Juan", tools.now_local().date().isoformat())
     await scheduler.waiting_followups()
     send = [p for m, p in tg_calls if m == "sendMessage"][-1]
-    assert "¿Llegó?" in send["text"]
+    assert "¿llegó esto?" in send["text"]
     await scheduler.waiting_followups()  # no repite el mismo día
     assert len([m for m, _ in tg_calls if m == "sendMessage"]) == 1
     fake = FakeClaude([_msg([TextBlock(type="text", text="Hola Juan, ¿cómo va el presupuesto?")], "end_turn")])
@@ -653,3 +654,15 @@ async def test_jobs_with_day_lists(database, monkeypatch):
     monkeypatch.setattr(config.settings, "discovery_days", [now.weekday()])
     await scheduler.daily_jobs()
     assert calls == [1]
+
+
+
+async def test_long_messages_use_smart_model(database, monkeypatch):
+    fake = FakeClaude([_msg([TextBlock(type="text", text="Andrés, estoy de tu lado.")], "end_turn"),
+                       _msg([TextBlock(type="text", text="Anotado, Andrés.")], "end_turn")])
+    monkeypatch.setattr(agent, "client", lambda: fake)
+    await agent.run("Estoy podrido de un empleado mío que va a quejarse con los jefes. " * 8)
+    await agent.run("Gasté 40 lucas en nafta")
+    assert fake.calls[0]["model"] == config.settings.model_smart
+    assert fake.calls[1]["model"] == config.settings.model
+    assert "REGLA DE ORO" in fake.calls[0]["system"][0]["text"]

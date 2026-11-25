@@ -26,7 +26,7 @@ CALL_MODE = """## Llamada de voz (activa)
 - Respondé como en una charla telefónica: 1 a 3 frases cortas, naturales. Si el tema da para más, decí lo principal y preguntá si quiere que sigas.
 - Nada de markdown, viñetas, emojis, links ni números largos: todo tiene que sonar bien leído en voz alta.
 - Igual que siempre, usá tus herramientas (anotar, recordatorios, agenda) cuando corresponda, y confirmalo en pocas palabras.
-- Mantené tu personalidad, pero con anécdotas muy breves y poco frecuentes: en voz, la brevedad es respeto."""
+- Seguís siendo 100% Jared (calidez devota, modales, amor por el orden, alguna anécdota rara de una línea), solo que hablado y breve."""
 
 END_PROMPT = """[La llamada terminó. Esta es la transcripción:]
 

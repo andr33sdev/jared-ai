@@ -170,7 +170,9 @@ async def run(
     async with lock:
         mode = await db.kv_get("mode")
         if smart is None:
-            smart = mode == "charla" or _has_document(user_content)
+            smart = (mode == "charla" or _has_document(user_content)
+                     or (isinstance(user_content, str) and not user_content.startswith(("(", "["))
+                         and len(user_content) >= config.settings.smart_min_chars))
         model = config.settings.model_smart if smart else config.settings.model
         system = [
             {"type": "text", "text": persona.persona(), "cache_control": {"type": "ephemeral"}},

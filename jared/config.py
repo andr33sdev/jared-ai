@@ -17,6 +17,7 @@ class Settings:
     anthropic_api_key: str | None
     model: str
     model_smart: str
+    smart_min_chars: int
     telegram_token: str | None
     owner_id: int | None
     owner_name: str
@@ -77,6 +78,8 @@ def load() -> Settings:
         anthropic_api_key=_env("ANTHROPIC_API_KEY"),
         model=_env("JARED_MODEL", "claude-haiku-5-5"),
         model_smart=_env("JARED_MODEL_SMART", "claude-sonnet-5-5"),
+        # mensajes largos (descargas, reflexiones) los contesta el modelo más fino
+        smart_min_chars=int(_env("SMART_MIN_CHARS", "350")),
         telegram_token=token,
         owner_id=int(owner) if owner else None,
         owner_name=_env("OWNER_NAME", "Andrés"),

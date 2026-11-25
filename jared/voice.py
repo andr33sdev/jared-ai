@@ -111,7 +111,7 @@ async def speak(text: str, prefer: str = "premium") -> tuple[bytes | None, str]:
                 total = await _eleven_add(len(clean))
                 if total >= limit * 0.9 and not await db.kv_get(f"eleven_warned_{_month()}", False):
                     await db.kv_set(f"eleven_warned_{_month()}", True)
-                    await _warn(f"🎙️ Ya usé el 90% del tope mensual de voz premium "
+                    await _warn(f"🎙️ Perdón la molestia: ya usé el 90% del tope mensual de mi voz linda "
                                 f"({total:,} de {limit:,} caracteres). Al llegar al 100% sigo con la voz gratis.")
                 return audio, "premium"
             except Exception as exc:

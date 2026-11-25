@@ -96,7 +96,8 @@ async def _safe_handle(update: dict) -> None:
             with contextlib.suppress(Exception):
                 await telegram.send_message(
                     chat,
-                    "Perdón, se me trabó algo de mi lado.\n"
+                    f"Perdón, {config.settings.owner_name}, se me trabó algo de mi lado. Me siento fatal. "
+                    "¿Me lo repetís en un ratito?\n"
                     f"Detalle técnico: {type(exc).__name__}: {str(exc)[:300]}",
                 )
 
